@@ -22,6 +22,15 @@ function getSortedMoves(chess) {
   return chess.moves({ verbose: false }).sort();
 }
 
+// Get verbose moves sorted by UCI (must mirror player.js canonical order)
+function getSortedVerboseMoves(chess) {
+  return chess.moves({ verbose: true }).sort((a, b) => {
+    const uciA = a.from + a.to + (a.promotion || "");
+    const uciB = b.from + b.to + (b.promotion || "");
+    return uciA.localeCompare(uciB);
+  });
+}
+
 // Decode a full game (both colors) — extracts bits only from White's moves.
 // Use this when the game was played vs Lichess AI.
 export async function decodeFromGameId(gameId, password) {
@@ -34,19 +43,30 @@ export async function decodeFromMoves(allMoves, password) {
   let allBits = "";
 
   for (let i = 0; i < allMoves.length; i++) {
-    const legalMoves = getSortedMoves(chess);
     const isWhite = i % 2 === 0;
+    const uciMove = allMoves[i]; // Lichess returns UCI (e.g. "e2e4")
 
     if (isWhite) {
-      const cap = capacityBits(legalMoves.length);
+      let verboseMoves = getSortedVerboseMoves(chess);
+      // Mirror encoder: exclude king moves unless forced
+      const nonKing = verboseMoves.filter((m) => m.piece !== "k");
+      if (nonKing.length > 0) verboseMoves = nonKing;
+
+      const cap = capacityBits(verboseMoves.length);
       if (cap > 0) {
-        const moveIndex = legalMoves.indexOf(allMoves[i]);
-        if (moveIndex === -1) throw new Error(`Illegal White move: ${allMoves[i]}`);
+        const moveIndex = verboseMoves.findIndex(
+          (m) => m.from + m.to + (m.promotion || "") === uciMove
+        );
+        if (moveIndex === -1) throw new Error(`Illegal White move: ${uciMove}`);
         allBits += moveIndex.toString(2).padStart(cap, "0");
       }
     }
 
-    chess.move(allMoves[i]);
+    // chess.js accepts UCI-style objects; parse from/to from the UCI string
+    const from = uciMove.slice(0, 2);
+    const to = uciMove.slice(2, 4);
+    const promotion = uciMove.length === 5 ? uciMove[4] : undefined;
+    chess.move({ from, to, promotion });
 
     // Early exit once we have enough bits
     if (allBits.length >= 32) {

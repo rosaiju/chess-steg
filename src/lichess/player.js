@@ -31,21 +31,40 @@ class StegSession {
       : this.bitIndex / this.allBits.length;
   }
 
-  // Apply any move (White or Black) to advance board position
-  applyMove(san) {
-    this.chess.move(san);
+  // Apply any move (White or Black) — accepts SAN or UCI ("e2e4")
+  applyMove(move) {
+    if (/^[a-h][1-8][a-h][1-8][qrbnQRBN]?$/.test(move)) {
+      const from = move.slice(0, 2);
+      const to = move.slice(2, 4);
+      const promotion = move.length === 5 ? move[4] : undefined;
+      this.chess.move({ from, to, promotion });
+    } else {
+      this.chess.move(move);
+    }
   }
 
   // Pick the next White move that encodes the next bits chunk
+  // Returns { san, uci } — san for display, uci for Lichess API
   nextEncodingMove() {
     if (this.isDone) return null;
-    const legalMoves = this.chess.moves({ verbose: false }).sort();
-    if (legalMoves.length === 0 || this.chess.isGameOver()) return null;
+    let verboseMoves = this.chess.moves({ verbose: true });
+    if (verboseMoves.length === 0 || this.chess.isGameOver()) return null;
 
-    const cap = capacityBits(legalMoves.length);
+    // Avoid king moves to keep White's king safe (unless forced)
+    const nonKing = verboseMoves.filter((m) => m.piece !== "k");
+    if (nonKing.length > 0) verboseMoves = nonKing;
+
+    // Sort by UCI for canonical order (consistent with decoder)
+    verboseMoves.sort((a, b) => {
+      const uciA = a.from + a.to + (a.promotion || "");
+      const uciB = b.from + b.to + (b.promotion || "");
+      return uciA.localeCompare(uciB);
+    });
+
+    const cap = capacityBits(verboseMoves.length);
     if (cap === 0) {
-      // Only 1 legal move — forced, can't encode
-      return legalMoves[0];
+      const m = verboseMoves[0];
+      return { san: m.san, uci: m.from + m.to + (m.promotion || "") };
     }
 
     const remaining = this.allBits.length - this.bitIndex;
@@ -56,7 +75,8 @@ class StegSession {
     const moveIndex = parseInt(chunk, 2);
 
     this.bitIndex += bitsToUse;
-    return legalMoves[moveIndex];
+    const m = verboseMoves[moveIndex];
+    return { san: m.san, uci: m.from + m.to + (m.promotion || "") };
   }
 }
 
@@ -85,27 +105,36 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
     if (event.type !== "gameFull" && event.type !== "gameState") continue;
 
     const state = event.type === "gameFull" ? event.state : event;
-
-    // Sync board: apply any moves the server already knows about
     const serverMoves = state.moves ? state.moves.split(" ").filter(Boolean) : [];
-    const localMoveCount = session.chess.history().length;
-    for (let i = localMoveCount; i < serverMoves.length; i++) {
-      session.applyMove(serverMoves[i]);
+
+    // Always rebuild board from server's authoritative move list
+    const rebuilt = new Chess();
+    for (const uci of serverMoves) {
+      rebuilt.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || undefined });
+    }
+    session.chess = rebuilt;
+
+    // Keep board in sync after every server event (shows Black's moves too)
+    if (serverMoves.length > 0) {
+      onEvent({ type: "fen", fen: rebuilt.fen() });
     }
 
-    const isWhiteTurn = session.chess.turn() === "w";
+    const isWhiteTurn = rebuilt.turn() === "w";
 
-    if (isWhiteTurn && !session.isDone && !session.chess.isGameOver()) {
+    if (isWhiteTurn && !session.isDone && !rebuilt.isGameOver()) {
       const move = session.nextEncodingMove();
       if (!move) break;
 
-      await makeMove(gameId, move);
-      session.applyMove(move);
-      whiteMoves.push(move);
+      await makeMove(gameId, move.uci);
+      whiteMoves.push(move.san);
+
+      // Apply our move to rebuilt so we can send the updated FEN for display
+      rebuilt.move({ from: move.uci.slice(0, 2), to: move.uci.slice(2, 4), promotion: move.uci[4] || undefined });
 
       onEvent({
         type: "move",
-        move,
+        move: move.san,
+        fen: rebuilt.fen(),
         moveNum: whiteMoves.length,
         progress: session.progress,
         gameId,

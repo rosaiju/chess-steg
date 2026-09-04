@@ -10,7 +10,7 @@ export async function createAIGame(color = "white", level = 1) {
   const res = await fetch(`${BASE}/api/challenge/ai`, {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ level, color, "clock.limit": 300, "clock.increment": 0 }),
+    body: new URLSearchParams({ level, color, days: 3 }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -55,14 +55,19 @@ export async function* streamGame(gameId) {
   }
 }
 
-// Fetch all moves for a completed/ongoing game
+// Fetch all moves for a completed/ongoing game, returned as UCI strings (e.g. "e2e4").
+// Uses the Board API stream — same endpoint as encoding, CORS guaranteed.
+// The gameFull event always arrives first with the full move history.
 export async function fetchGameMoves(gameId) {
-  const res = await fetch(`${BASE}/api/game/${gameId}?moves=true`, {
-    headers: { ...authHeaders, Accept: "application/json" },
-  });
-  if (!res.ok) throw new Error(`Failed to fetch game: ${res.status}`);
-  const data = await res.json();
-  return data.moves ? data.moves.split(" ").filter(Boolean) : [];
+  for await (const event of streamGame(gameId)) {
+    if (event.type === "gameFull") {
+      return (event.state?.moves ?? "").split(" ").filter(Boolean);
+    }
+    if (event.type === "gameState") {
+      return (event.moves ?? "").split(" ").filter(Boolean);
+    }
+  }
+  return [];
 }
 
 // Extract gameId from a lichess.org URL or bare ID

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import { flushSync } from "react-dom";
 import { Chessboard } from "react-chessboard";
-import { Chess } from "chess.js";
 import { playEncodedGame } from "../lichess/player.js";
 
-const INITIAL_FEN = new Chess().fen();
+const INITIAL_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 export default function EncoderPanel() {
   const [message, setMessage] = useState("HELLO DR WANG");
@@ -13,6 +13,14 @@ export default function EncoderPanel() {
   const [fen, setFen] = useState(INITIAL_FEN);
   const [gameUrl, setGameUrl] = useState("");
   const [progress, setProgress] = useState(0);
+  const logRef = useRef(null);
+
+  // Auto-scroll log to bottom on new entries
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [log]);
 
   function addLog(line) {
     setLog((prev) => [...prev, line]);
@@ -26,8 +34,6 @@ export default function EncoderPanel() {
     setGameUrl("");
     setProgress(0);
 
-    const chess = new Chess();
-
     try {
       await playEncodedGame(message, password, (event) => {
         if (event.type === "creating") {
@@ -35,10 +41,13 @@ export default function EncoderPanel() {
         } else if (event.type === "created") {
           addLog(`Game created: ${event.url}`);
           setGameUrl(event.url);
+        } else if (event.type === "fen") {
+          flushSync(() => setFen(event.fen));
         } else if (event.type === "move") {
-          chess.move(event.move);
-          setFen(chess.fen());
-          setProgress(Math.round(event.progress * 100));
+          flushSync(() => {
+            setFen(event.fen);
+            setProgress(Math.round(event.progress * 100));
+          });
           addLog(`Move ${event.moveNum}: ${event.move} (${Math.round(event.progress * 100)}%)`);
         } else if (event.type === "done") {
           addLog(`Done! All bits encoded in ${event.whiteMoves.length} White moves.`);
@@ -95,9 +104,19 @@ export default function EncoderPanel() {
         </div>
       )}
 
-      <div className="board-wrap">
-        <Chessboard position={fen} arePiecesDraggable={false} boardWidth={320} />
-      </div>
+      {gameUrl && status === "running" ? (
+        <iframe
+          src={`https://lichess.org/embed/game/${gameUrl.split("/").pop()}?theme=brown&bg=dark`}
+          width="100%"
+          height="360"
+          style={{ border: "none", borderRadius: "8px" }}
+          title="Live game"
+        />
+      ) : (
+        <div className="board-wrap">
+          <Chessboard position={fen} arePiecesDraggable={false} boardWidth={320} />
+        </div>
+      )}
 
       {gameUrl && (
         <div className="game-link">
@@ -107,7 +126,7 @@ export default function EncoderPanel() {
         </div>
       )}
 
-      <div className="log">
+      <div className="log" ref={logRef}>
         {log.map((line, i) => (
           <div key={i}>{line}</div>
         ))}
