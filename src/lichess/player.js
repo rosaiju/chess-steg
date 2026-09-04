@@ -1,6 +1,6 @@
 import { Chess } from "chess.js";
 import { encrypt } from "../steg/crypto.js";
-import { createAIGame, makeMove, streamGame, challengeUser, resignGame, streamAccountEvents } from "./api.js";
+import { createAIGame, makeMove, streamGame } from "./api.js";
 
 function bytesToBits(bytes) {
   return Array.from(bytes)
@@ -122,37 +122,16 @@ async function buildBits(plaintext, password) {
   return lenBits + bytesToBits(cipherBytes);
 }
 
-// Play the full encoded game on Lichess.
-// opponentUsername: Lichess username to challenge (human game); null/empty = vs AI level 1.
+// Play the full encoded game on Lichess vs AI (level 1).
 // Calls onEvent({ type, ... }) for UI updates.
-export async function playEncodedGame(plaintext, password, opponentUsername, onEvent = () => {}) {
+export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
   const allBits = await buildBits(plaintext, password);
   const session = new StegSession(allBits);
-  let gameId;
 
-  if (opponentUsername) {
-    // Human opponent: challenge by username, wait for them to accept
-    onEvent({ type: "challenging", opponent: opponentUsername });
-    const result = await challengeUser(opponentUsername);
-    gameId = result.challenge.id;
-    onEvent({ type: "waiting", gameId, opponent: opponentUsername, url: `https://lichess.org/${gameId}` });
-
-    // Stream account events until the challenge is accepted (gameStart) or declined
-    for await (const event of streamAccountEvents()) {
-      if (event.type === "gameStart" && event.game?.gameId === gameId) break;
-      if (event.type === "challengeDeclined") {
-        onEvent({ type: "declined", opponent: opponentUsername });
-        return { gameId, url: `https://lichess.org/${gameId}`, whiteMoves: [] };
-      }
-    }
-    onEvent({ type: "started", gameId, url: `https://lichess.org/${gameId}` });
-  } else {
-    // AI fallback
-    onEvent({ type: "creating" });
-    const game = await createAIGame("white", 1);
-    gameId = game.id;
-    onEvent({ type: "created", gameId, url: `https://lichess.org/${gameId}` });
-  }
+  onEvent({ type: "creating" });
+  const game = await createAIGame("white", 1);
+  const gameId = game.id;
+  onEvent({ type: "created", gameId, url: `https://lichess.org/${gameId}` });
 
   const whiteMoves = [];
 
@@ -196,8 +175,6 @@ export async function playEncodedGame(plaintext, password, opponentUsername, onE
 
     if (session.isDone) {
       onEvent({ type: "done", gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
-      // Resign so the game ends immediately and the opponent can decode right away
-      if (opponentUsername) await resignGame(gameId);
       break;
     }
 
