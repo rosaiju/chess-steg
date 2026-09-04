@@ -53,23 +53,17 @@ export default function EncoderPanel() {
         } else if (event.type === "created") {
           addLog(`Game created: ${event.url}`);
           setGameUrl(event.url);
-        } else if (event.type === "play_this") {
-          setCurrentMove({ san: event.move, moveNum: event.moveNum });
-          setAiThinking(false);
         } else if (event.type === "ai_thinking") {
           setCurrentMove(null);
           setAiThinking(true);
         } else if (event.type === "fen") {
           setFen(event.fen);
         } else if (event.type === "move") {
-          setCurrentMove(null);
+          setCurrentMove({ san: event.move, moveNum: event.moveNum });
           setAiThinking(false);
           setFen(event.fen);
           setProgress(Math.round(event.progress * 100));
           addLog(`Move ${event.moveNum}: ${event.move} (${Math.round(event.progress * 100)}%)`);
-        } else if (event.type === "wrong_move") {
-          addLog(`Wrong move! Expected ${event.expected}, robot played ${event.actual}. Encoding corrupted.`);
-          setStatus("error");
         } else if (event.type === "done") {
           setCurrentMove(null);
           setAiThinking(false);
@@ -139,7 +133,7 @@ export default function EncoderPanel() {
           gap: "12px",
           fontSize: "1.1rem",
         }}>
-          <span style={{ opacity: 0.75, fontSize: "0.85rem" }}>Move {currentMove.moveNum} — SenseRobot plays:</span>
+          <span style={{ opacity: 0.75, fontSize: "0.85rem" }}>Move {currentMove.moveNum} — White played:</span>
           <span style={{ fontWeight: "700", fontSize: "1.5rem", letterSpacing: "0.04em" }}>{currentMove.san}</span>
         </div>
       )}
