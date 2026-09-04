@@ -17,18 +17,34 @@ function capacityBits(numMoves) {
   return Math.max(0, Math.floor(Math.log2(numMoves)));
 }
 
+const ENCODING_BITS = 3;
+const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 8
+
 // Get sorted legal moves (same canonical order as encoder)
 function getSortedMoves(chess) {
   return chess.moves({ verbose: false }).sort();
 }
 
-// Get verbose moves sorted by UCI (must mirror player.js canonical order)
+// Quality sort — must mirror player.js exactly
+const PIECE_VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+function moveScore(m) {
+  let s = 0;
+  if (m.captured) s += PIECE_VAL[m.captured] * 100;
+  if (m.promotion) s += PIECE_VAL[m.promotion] * 50;
+  if ((m.piece === "r" || m.piece === "q") && m.from[1] === m.to[1] && m.from[1] === "1") s -= 40;
+  return s;
+}
+function qualitySort(a, b) {
+  const diff = moveScore(b) - moveScore(a);
+  if (diff !== 0) return diff;
+  const uciA = a.from + a.to + (a.promotion || "");
+  const uciB = b.from + b.to + (b.promotion || "");
+  return uciA.localeCompare(uciB);
+}
+
+// Get verbose moves in quality order (must mirror player.js canonical order)
 function getSortedVerboseMoves(chess) {
-  return chess.moves({ verbose: true }).sort((a, b) => {
-    const uciA = a.from + a.to + (a.promotion || "");
-    const uciB = b.from + b.to + (b.promotion || "");
-    return uciA.localeCompare(uciB);
-  });
+  return chess.moves({ verbose: true }).sort(qualitySort);
 }
 
 // Decode a full game (both colors) — extracts bits only from White's moves.
@@ -52,14 +68,14 @@ export async function decodeFromMoves(allMoves, password) {
       const nonKing = verboseMoves.filter((m) => m.piece !== "k");
       if (nonKing.length > 0) verboseMoves = nonKing;
 
-      const cap = capacityBits(verboseMoves.length);
-      if (cap > 0) {
+      if (verboseMoves.length >= ENCODING_PATTERNS) {
         const moveIndex = verboseMoves.findIndex(
           (m) => m.from + m.to + (m.promotion || "") === uciMove
         );
         if (moveIndex === -1) throw new Error(`Illegal White move: ${uciMove}`);
-        allBits += moveIndex.toString(2).padStart(cap, "0");
+        allBits += (moveIndex % ENCODING_PATTERNS).toString(2).padStart(ENCODING_BITS, "0");
       }
+      // If < ENCODING_PATTERNS moves: forced/no-encode move, extract 0 bits
     }
 
     // chess.js accepts UCI-style objects; parse from/to from the UCI string

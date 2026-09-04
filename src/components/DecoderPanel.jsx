@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
 import { decodeFromGameId } from "../steg/decoder.js";
@@ -13,6 +13,16 @@ export default function DecoderPanel() {
   const [decoded, setDecoded] = useState("");
   const [error, setError] = useState("");
   const [fen, setFen] = useState(INITIAL_FEN);
+  const panelRef = useRef(null);
+  const [boardWidth, setBoardWidth] = useState(320);
+
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setBoardWidth(Math.floor(e.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   async function handleDecode() {
     if (!gameInput.trim() || !password.trim()) return;
@@ -32,7 +42,7 @@ export default function DecoderPanel() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" ref={panelRef}>
       <h2>Decoder</h2>
 
       <div className="field">
@@ -65,7 +75,7 @@ export default function DecoderPanel() {
       </button>
 
       <div className="board-wrap">
-        <Chessboard position={fen} arePiecesDraggable={false} boardWidth={320} />
+        <Chessboard position={fen} arePiecesDraggable={false} boardWidth={boardWidth} />
       </div>
 
       {status === "done" && (

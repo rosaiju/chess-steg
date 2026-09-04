@@ -12,6 +12,28 @@ function capacityBits(numMoves) {
   return Math.max(0, Math.floor(Math.log2(numMoves)));
 }
 
+const ENCODING_BITS = 3;
+const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 8
+
+// Deterministic quality sort — used by both encoder and decoder.
+// Better moves get lower indices so the encoding prefers them statistically.
+const PIECE_VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+function moveScore(m) {
+  let s = 0;
+  if (m.captured) s += PIECE_VAL[m.captured] * 100;  // captures first
+  if (m.promotion) s += PIECE_VAL[m.promotion] * 50; // promotions
+  // Penalise rook/queen shuffles along the back rank (they keep appearing at index 0)
+  if ((m.piece === "r" || m.piece === "q") && m.from[1] === m.to[1] && m.from[1] === "1") s -= 40;
+  return s;
+}
+function qualitySort(a, b) {
+  const diff = moveScore(b) - moveScore(a); // descending score
+  if (diff !== 0) return diff;
+  const uciA = a.from + a.to + (a.promotion || "");
+  const uciB = b.from + b.to + (b.promotion || "");
+  return uciA.localeCompare(uciB); // tiebreak by UCI for determinism
+}
+
 // Stateful encoding session — works incrementally as the game progresses.
 // Encodes bits into White's moves; Black (AI) plays freely.
 class StegSession {
@@ -54,29 +76,41 @@ class StegSession {
     const nonKing = verboseMoves.filter((m) => m.piece !== "k");
     if (nonKing.length > 0) verboseMoves = nonKing;
 
-    // Sort by UCI for canonical order (consistent with decoder)
-    verboseMoves.sort((a, b) => {
-      const uciA = a.from + a.to + (a.promotion || "");
-      const uciB = b.from + b.to + (b.promotion || "");
-      return uciA.localeCompare(uciB);
-    });
+    // Sort by quality first (better moves at low indices), UCI as tiebreak.
+    // Deterministic — decoder must mirror this exactly.
+    verboseMoves.sort(qualitySort);
 
-    const cap = capacityBits(verboseMoves.length);
-    if (cap === 0) {
+    // Fallback: fewer than ENCODING_PATTERNS moves — play best, encode 0 bits
+    if (verboseMoves.length < ENCODING_PATTERNS) {
       const m = verboseMoves[0];
       return { san: m.san, uci: m.from + m.to + (m.promotion || "") };
     }
 
+    // Modular encoding: bits = moveIndex % ENCODING_PATTERNS
+    // Multiple moves encode the same pattern; pick the best-quality one.
     const remaining = this.allBits.length - this.bitIndex;
-    const bitsToUse = Math.min(cap, remaining);
-    const chunk = this.allBits
-      .slice(this.bitIndex, this.bitIndex + bitsToUse)
-      .padEnd(cap, "0");
-    const moveIndex = parseInt(chunk, 2);
+    const bitsToUse = Math.min(ENCODING_BITS, remaining);
+    const b = parseInt(
+      this.allBits.slice(this.bitIndex, this.bitIndex + bitsToUse).padEnd(ENCODING_BITS, "0"),
+      2
+    );
+
+    // Walk candidates: indices b, b+8, b+16, … — pick first non-mating move
+    let chosen = null;
+    for (let idx = b; idx < verboseMoves.length; idx += ENCODING_PATTERNS) {
+      const m = verboseMoves[idx];
+      // Skip if this move accidentally delivers checkmate (need more moves to finish encoding)
+      const temp = new Chess(this.chess.fen());
+      temp.move(m.san);
+      if (temp.isCheckmate()) continue;
+      chosen = m;
+      break;
+    }
+    // Fallback: all candidates checkmate — extremely rare, just play the first candidate
+    if (!chosen) chosen = verboseMoves[b];
 
     this.bitIndex += bitsToUse;
-    const m = verboseMoves[moveIndex];
-    return { san: m.san, uci: m.from + m.to + (m.promotion || "") };
+    return { san: chosen.san, uci: chosen.from + chosen.to + (chosen.promotion || "") };
   }
 }
 

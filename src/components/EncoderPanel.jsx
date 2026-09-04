@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { flushSync } from "react-dom";
 import { Chessboard } from "react-chessboard";
 import { playEncodedGame } from "../lichess/player.js";
 
@@ -14,8 +13,17 @@ export default function EncoderPanel() {
   const [gameUrl, setGameUrl] = useState("");
   const [progress, setProgress] = useState(0);
   const logRef = useRef(null);
+  const panelRef = useRef(null);
+  const [boardWidth, setBoardWidth] = useState(320);
 
-  // Auto-scroll log to bottom on new entries
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setBoardWidth(Math.floor(e.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -42,12 +50,10 @@ export default function EncoderPanel() {
           addLog(`Game created: ${event.url}`);
           setGameUrl(event.url);
         } else if (event.type === "fen") {
-          flushSync(() => setFen(event.fen));
+          setFen(event.fen);
         } else if (event.type === "move") {
-          flushSync(() => {
-            setFen(event.fen);
-            setProgress(Math.round(event.progress * 100));
-          });
+          setFen(event.fen);
+          setProgress(Math.round(event.progress * 100));
           addLog(`Move ${event.moveNum}: ${event.move} (${Math.round(event.progress * 100)}%)`);
         } else if (event.type === "done") {
           addLog(`Done! All bits encoded in ${event.whiteMoves.length} White moves.`);
@@ -66,7 +72,7 @@ export default function EncoderPanel() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" ref={panelRef}>
       <h2>Encoder</h2>
 
       <div className="field">
@@ -104,19 +110,9 @@ export default function EncoderPanel() {
         </div>
       )}
 
-      {gameUrl && status === "running" ? (
-        <iframe
-          src={`https://lichess.org/embed/game/${gameUrl.split("/").pop()}?theme=brown&bg=dark`}
-          width="100%"
-          height="360"
-          style={{ border: "none", borderRadius: "8px" }}
-          title="Live game"
-        />
-      ) : (
-        <div className="board-wrap">
-          <Chessboard position={fen} arePiecesDraggable={false} boardWidth={320} />
-        </div>
-      )}
+      <div className="board-wrap">
+        <Chessboard position={fen} arePiecesDraggable={false} boardWidth={boardWidth} />
+      </div>
 
       {gameUrl && (
         <div className="game-link">
