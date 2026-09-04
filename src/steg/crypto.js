@@ -1,10 +1,10 @@
 // AES-256-GCM encryption/decryption via Web Crypto API
 // IV is derived from the password (not transmitted), saving 12 bytes per message.
-// Tag length is 64 bits (8 bytes) instead of 128, saving another 8 bytes.
-// Total overhead: 8 bytes (tag only) instead of 28 bytes (IV + 128-bit tag).
+// Tag length is 32 bits (4 bytes) instead of 128, saving another 12 bytes.
+// Total overhead: 4 bytes (tag only) instead of 28 bytes (IV + 128-bit tag).
 
 const ALGO = { name: "AES-GCM", length: 256 };
-const TAG_LENGTH = 64; // bits — valid values: 32,64,96,104,112,120,128
+const TAG_LENGTH = 32; // bits — valid values: 32,64,96,104,112,120,128
 
 async function deriveKey(password) {
   const enc = new TextEncoder();

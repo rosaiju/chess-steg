@@ -1,6 +1,6 @@
 import { Chess } from "chess.js";
 import { encrypt } from "../steg/crypto.js";
-import { createAIGame, makeMove, streamGame } from "./api.js";
+import { createAIGame, makeMove, streamGame, challengeUser, streamAccountEvents } from "./api.js";
 
 function bytesToBits(bytes) {
   return Array.from(bytes)
@@ -12,8 +12,8 @@ function capacityBits(numMoves) {
   return Math.max(0, Math.floor(Math.log2(numMoves)));
 }
 
-const ENCODING_BITS = 3;
-const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 8
+const ENCODING_BITS = 4;
+const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 16
 
 // Deterministic quality sort — used by both encoder and decoder.
 // Better moves get lower indices so the encoding prefers them statistically.
@@ -95,7 +95,7 @@ class StegSession {
       2
     );
 
-    // Walk candidates: indices b, b+8, b+16, … — pick first non-mating move
+    // Walk candidates: indices b, b+16, b+32, … — pick first non-mating move
     let chosen = null;
     for (let idx = b; idx < verboseMoves.length; idx += ENCODING_PATTERNS) {
       const m = verboseMoves[idx];
@@ -118,20 +118,38 @@ class StegSession {
 async function buildBits(plaintext, password) {
   const cipherB64 = await encrypt(plaintext, password);
   const cipherBytes = Uint8Array.from(atob(cipherB64), (c) => c.charCodeAt(0));
-  const lenBits = cipherBytes.length.toString(2).padStart(32, "0");
+  const lenBits = cipherBytes.length.toString(2).padStart(8, "0");
   return lenBits + bytesToBits(cipherBytes);
 }
 
-// Play the full encoded game on Lichess vs AI (level 1).
+// Play the full encoded game on Lichess vs a human or AI (level 1 fallback).
 // Calls onEvent({ type, ... }) for UI updates.
-export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
+export async function playEncodedGame(plaintext, password, opponentUsername, onEvent = () => {}) {
   const allBits = await buildBits(plaintext, password);
   const session = new StegSession(allBits);
 
-  onEvent({ type: "creating" });
-  const game = await createAIGame("white", 1);
-  const gameId = game.id;
-  onEvent({ type: "created", gameId, url: `https://lichess.org/${gameId}` });
+  let gameId;
+  if (opponentUsername) {
+    onEvent({ type: "challenging", opponent: opponentUsername });
+    const result = await challengeUser(opponentUsername);
+    gameId = result.challenge.id;
+    onEvent({ type: "waiting", gameId, opponent: opponentUsername, url: `https://lichess.org/${gameId}` });
+
+    for await (const event of streamAccountEvents()) {
+      if (event.type === "gameStart" && event.game?.gameId === gameId) break;
+      if (event.type === "challengeDeclined") {
+        onEvent({ type: "declined", opponent: opponentUsername });
+        return;
+      }
+    }
+    onEvent({ type: "started", gameId, url: `https://lichess.org/${gameId}` });
+  } else {
+    // AI fallback for solo testing
+    onEvent({ type: "creating" });
+    const game = await createAIGame("white", 1);
+    gameId = game.id;
+    onEvent({ type: "created", gameId, url: `https://lichess.org/${gameId}` });
+  }
 
   const whiteMoves = [];
 
@@ -152,26 +170,30 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
       onEvent({ type: "fen", fen: rebuilt.fen() });
     }
 
-    if (state.status && !["created", "started"].includes(state.status)) {
-      onEvent({ type: "ended", status: state.status });
-      break;
-    }
-
-    if (session.isDone) {
-      onEvent({ type: "done", gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
-      break;
-    }
-
     const isWhiteTurn = rebuilt.turn() === "w";
 
     if (isWhiteTurn && !rebuilt.isGameOver()) {
-      // Submit the encoded move via Board API; SenseRobot mirrors it physically via Lichess
-      const move = session.nextEncodingMove();
-      if (!move) break;
+      let move;
+      if (!session.isDone) {
+        // Still encoding — pick a steganographic move
+        move = session.nextEncodingMove();
+        if (!move) break;
+        if (session.isDone) {
+          // Just encoded the last bit — notify UI
+          onEvent({ type: "encoded", gameId, url: `https://lichess.org/${gameId}`, whiteMoves: [...whiteMoves] });
+        }
+      } else {
+        // Encoding done — keep playing quality moves until game ends naturally
+        let pool = session.chess.moves({ verbose: true });
+        const nonKing = pool.filter((m) => m.piece !== "k");
+        if (nonKing.length > 0) pool = nonKing;
+        pool.sort(qualitySort);
+        const m = pool[0];
+        move = { san: m.san, uci: m.from + m.to + (m.promotion || "") };
+      }
 
       await makeMove(gameId, move.uci);
       whiteMoves.push(move.san);
-
       rebuilt.move({ from: move.uci.slice(0, 2), to: move.uci.slice(2, 4), promotion: move.uci[4] || undefined });
 
       onEvent({
@@ -179,11 +201,17 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
         move: move.san,
         fen: rebuilt.fen(),
         moveNum: whiteMoves.length,
-        progress: session.progress,
+        progress: Math.min(session.progress, 1),
         gameId,
       });
     } else if (!isWhiteTurn) {
       onEvent({ type: "ai_thinking" });
+    }
+
+    // Break only when game ends naturally
+    if (state.status && !["created", "started"].includes(state.status)) {
+      onEvent({ type: "done", status: state.status, gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
+      break;
     }
   }
 

@@ -17,8 +17,8 @@ function capacityBits(numMoves) {
   return Math.max(0, Math.floor(Math.log2(numMoves)));
 }
 
-const ENCODING_BITS = 3;
-const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 8
+const ENCODING_BITS = 4;
+const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 16
 
 // Get sorted legal moves (same canonical order as encoder)
 function getSortedMoves(chess) {
@@ -85,9 +85,9 @@ export async function decodeFromMoves(allMoves, password) {
     chess.move({ from, to, promotion });
 
     // Early exit once we have enough bits
-    if (allBits.length >= 32) {
-      const cipherByteLen = parseInt(allBits.slice(0, 32), 2);
-      if (allBits.length >= 32 + cipherByteLen * 8) break;
+    if (allBits.length >= 8) {
+      const cipherByteLen = parseInt(allBits.slice(0, 8), 2);
+      if (allBits.length >= 8 + cipherByteLen * 8) break;
     }
   }
 
@@ -95,9 +95,9 @@ export async function decodeFromMoves(allMoves, password) {
 }
 
 async function finishDecode(allBits, password) {
-  if (allBits.length < 32) throw new Error("Too few moves to contain a message.");
-  const cipherByteLen = parseInt(allBits.slice(0, 32), 2);
-  const cipherBits = allBits.slice(32, 32 + cipherByteLen * 8);
+  if (allBits.length < 8) throw new Error("Too few moves to contain a message.");
+  const cipherByteLen = parseInt(allBits.slice(0, 8), 2);
+  const cipherBits = allBits.slice(8, 8 + cipherByteLen * 8);
   if (cipherBits.length < cipherByteLen * 8) throw new Error("Not enough moves to decode the full message.");
   const cipherBytes = bitsToBytes(cipherBits);
   const cipherB64 = btoa(String.fromCharCode(...cipherBytes));

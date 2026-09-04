@@ -5,14 +5,15 @@ import { playEncodedGame } from "../lichess/player.js";
 const INITIAL_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 export default function EncoderPanel() {
-  const [message, setMessage] = useState("HELLO DR WANG");
+  const [message, setMessage] = useState("HELLO WANG");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | running | done | error
+  const [opponent, setOpponent] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | running | encoded | done | error
   const [log, setLog] = useState([]);
   const [fen, setFen] = useState(INITIAL_FEN);
   const [gameUrl, setGameUrl] = useState("");
   const [progress, setProgress] = useState(0);
-  const [currentMove, setCurrentMove] = useState(null); // { san, moveNum } — what SenseRobot must play next
+  const [currentMove, setCurrentMove] = useState(null); // { san, moveNum }
   const [aiThinking, setAiThinking] = useState(false);
   const logRef = useRef(null);
   const panelRef = useRef(null);
@@ -36,6 +37,8 @@ export default function EncoderPanel() {
     setLog((prev) => [...prev, line]);
   }
 
+  const isActive = status === "running" || status === "encoded";
+
   async function handleEncode() {
     if (!message.trim() || !password.trim()) return;
     setStatus("running");
@@ -47,9 +50,20 @@ export default function EncoderPanel() {
     setAiThinking(false);
 
     try {
-      await playEncodedGame(message, password, (event) => {
-        if (event.type === "creating") {
-          addLog("Creating game vs Lichess AI...");
+      await playEncodedGame(message, password, opponent.trim() || null, (event) => {
+        if (event.type === "challenging") {
+          addLog(`Challenging ${event.opponent}…`);
+        } else if (event.type === "waiting") {
+          addLog(`Waiting for ${event.opponent} to accept…`);
+          setGameUrl(event.url);
+        } else if (event.type === "started") {
+          addLog(`${event.opponent ? event.opponent + " accepted!" : "Game started!"} Encoding message into moves…`);
+          setGameUrl(event.url);
+        } else if (event.type === "declined") {
+          addLog(`Challenge declined by ${event.opponent}.`);
+          setStatus("error");
+        } else if (event.type === "creating") {
+          addLog("Creating game vs Lichess AI…");
         } else if (event.type === "created") {
           addLog(`Game created: ${event.url}`);
           setGameUrl(event.url);
@@ -64,16 +78,19 @@ export default function EncoderPanel() {
           setFen(event.fen);
           setProgress(Math.round(event.progress * 100));
           addLog(`Move ${event.moveNum}: ${event.move} (${Math.round(event.progress * 100)}%)`);
+        } else if (event.type === "encoded") {
+          setCurrentMove(null);
+          setAiThinking(false);
+          addLog(`✓ Message encoded in ${event.whiteMoves.length} White moves. Keep playing until the game ends.`);
+          setGameUrl(event.url);
+          setStatus("encoded");
         } else if (event.type === "done") {
           setCurrentMove(null);
           setAiThinking(false);
-          addLog(`Done! All bits encoded in ${event.whiteMoves.length} White moves.`);
+          addLog(`Game over (${event.status}). Paste the URL into the decoder to reveal the message.`);
           addLog(`Game URL: ${event.url}`);
           setGameUrl(event.url);
           setStatus("done");
-        } else if (event.type === "ended") {
-          addLog(`Game ended: ${event.status}`);
-          setStatus("error");
         }
       });
     } catch (err) {
@@ -91,8 +108,8 @@ export default function EncoderPanel() {
         <input
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          disabled={status === "running"}
-          placeholder="Type your secret message..."
+          disabled={isActive}
+          placeholder="Type your secret message…"
         />
       </div>
 
@@ -102,22 +119,58 @@ export default function EncoderPanel() {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          disabled={status === "running"}
+          disabled={isActive}
           placeholder="Shared secret key"
+        />
+      </div>
+
+      <div className="field">
+        <label>Opponent Username <span style={{ opacity: 0.55, fontWeight: 400 }}>(optional — blank = AI)</span></label>
+        <input
+          value={opponent}
+          onChange={(e) => setOpponent(e.target.value)}
+          disabled={isActive}
+          placeholder="Lichess username"
         />
       </div>
 
       <button
         onClick={handleEncode}
-        disabled={status === "running" || !message.trim() || !password.trim()}
+        disabled={isActive || !message.trim() || !password.trim()}
         className="btn-primary"
       >
-        {status === "running" ? `Encoding… ${progress}%` : "Encode & Play"}
+        {status === "running" ? `Encoding… ${progress}%` : status === "encoded" ? "Waiting for game to end…" : "Encode & Play"}
       </button>
 
-      {status === "running" && (
+      {isActive && (
         <div className="progress-bar">
           <div className="progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+      )}
+
+      {status === "encoded" && (
+        <div style={{
+          background: "#1a472a",
+          color: "#fff",
+          borderRadius: "8px",
+          padding: "14px 20px",
+          margin: "12px 0",
+          fontSize: "0.95rem",
+        }}>
+          ✓ Message encoded — finish the game, then decode with the URL below.
+        </div>
+      )}
+
+      {status === "done" && (
+        <div style={{
+          background: "#1a3a5c",
+          color: "#fff",
+          borderRadius: "8px",
+          padding: "14px 20px",
+          margin: "12px 0",
+          fontSize: "0.95rem",
+        }}>
+          Game over — paste the URL into the decoder to reveal the hidden message.
         </div>
       )}
 
@@ -146,7 +199,7 @@ export default function EncoderPanel() {
           margin: "12px 0",
           fontSize: "0.9rem",
         }}>
-          AI thinking…
+          Opponent thinking…
         </div>
       )}
 

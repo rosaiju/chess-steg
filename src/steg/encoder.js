@@ -28,8 +28,8 @@ export async function encodeMessage(plaintext, password) {
   const cipherBytes = Uint8Array.from(atob(cipherB64), (c) => c.charCodeAt(0));
   const cipherBits = bytesToBits(cipherBytes);
 
-  // 3. Prepend 32-bit header = ciphertext byte length (so decoder knows when to stop)
-  const lenBits = cipherBytes.length.toString(2).padStart(32, "0");
+  // 3. Prepend 8-bit header = ciphertext byte length (so decoder knows when to stop)
+  const lenBits = cipherBytes.length.toString(2).padStart(8, "0");
   const allBits = lenBits + cipherBits;
 
   // 4. Walk through the game, picking moves that encode our bits
