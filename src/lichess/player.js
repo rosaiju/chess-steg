@@ -1,6 +1,6 @@
 import { Chess } from "chess.js";
 import { encrypt } from "../steg/crypto.js";
-import { createAIGame, makeMove, streamGame } from "./api.js";
+import { createAIGame, streamGame } from "./api.js";
 
 function bytesToBits(bytes) {
   return Array.from(bytes)
@@ -134,6 +134,8 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
   onEvent({ type: "created", gameId, url: `https://lichess.org/${gameId}` });
 
   const whiteMoves = [];
+  // The move SenseRobot has been instructed to play but hasn't been confirmed by server yet
+  let pendingMove = null;
 
   for await (const event of streamGame(gameId)) {
     if (event.type !== "gameFull" && event.type !== "gameState") continue;
@@ -152,25 +154,32 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
       onEvent({ type: "fen", fen: rebuilt.fen() });
     }
 
-    const isWhiteTurn = rebuilt.turn() === "w";
+    if (state.status && !["created", "started"].includes(state.status)) {
+      onEvent({ type: "ended", status: state.status });
+      break;
+    }
 
-    if (isWhiteTurn && !session.isDone && !rebuilt.isGameOver()) {
-      const move = session.nextEncodingMove();
-      if (!move) break;
-
-      await makeMove(gameId, move.uci);
-      whiteMoves.push(move.san);
-
-      rebuilt.move({ from: move.uci.slice(0, 2), to: move.uci.slice(2, 4), promotion: move.uci[4] || undefined });
-
-      onEvent({
-        type: "move",
-        move: move.san,
-        fen: rebuilt.fen(),
-        moveNum: whiteMoves.length,
-        progress: session.progress,
-        gameId,
-      });
+    // White's moves sit at even indices (0, 2, 4, …) in serverMoves.
+    // Check whether the server has confirmed the pending White move.
+    const expectedWhiteMoveIdx = whiteMoves.length * 2;
+    if (pendingMove && serverMoves.length > expectedWhiteMoveIdx) {
+      const actualUci = serverMoves[expectedWhiteMoveIdx];
+      if (actualUci === pendingMove.uci) {
+        whiteMoves.push(pendingMove.san);
+        onEvent({
+          type: "move",
+          move: pendingMove.san,
+          fen: rebuilt.fen(),
+          moveNum: whiteMoves.length,
+          progress: session.progress,
+          gameId,
+        });
+        pendingMove = null;
+      } else {
+        // Robot played a different move — encoding is out of sync
+        onEvent({ type: "wrong_move", expected: pendingMove.san, actual: actualUci });
+        break;
+      }
     }
 
     if (session.isDone) {
@@ -178,9 +187,16 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
       break;
     }
 
-    if (state.status && !["created", "started"].includes(state.status)) {
-      onEvent({ type: "ended", status: state.status });
-      break;
+    const isWhiteTurn = rebuilt.turn() === "w";
+
+    if (isWhiteTurn && !pendingMove && !rebuilt.isGameOver()) {
+      // Compute the encoded move and tell SenseRobot to play it physically
+      const move = session.nextEncodingMove();
+      if (!move) break;
+      pendingMove = move;
+      onEvent({ type: "play_this", move: move.san, uci: move.uci, moveNum: whiteMoves.length + 1 });
+    } else if (!isWhiteTurn) {
+      onEvent({ type: "ai_thinking" });
     }
   }
 

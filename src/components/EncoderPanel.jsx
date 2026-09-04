@@ -12,6 +12,8 @@ export default function EncoderPanel() {
   const [fen, setFen] = useState(INITIAL_FEN);
   const [gameUrl, setGameUrl] = useState("");
   const [progress, setProgress] = useState(0);
+  const [currentMove, setCurrentMove] = useState(null); // { san, moveNum } — what SenseRobot must play next
+  const [aiThinking, setAiThinking] = useState(false);
   const logRef = useRef(null);
   const panelRef = useRef(null);
   const [boardWidth, setBoardWidth] = useState(320);
@@ -41,6 +43,8 @@ export default function EncoderPanel() {
     setFen(INITIAL_FEN);
     setGameUrl("");
     setProgress(0);
+    setCurrentMove(null);
+    setAiThinking(false);
 
     try {
       await playEncodedGame(message, password, (event) => {
@@ -49,13 +53,26 @@ export default function EncoderPanel() {
         } else if (event.type === "created") {
           addLog(`Game created: ${event.url}`);
           setGameUrl(event.url);
+        } else if (event.type === "play_this") {
+          setCurrentMove({ san: event.move, moveNum: event.moveNum });
+          setAiThinking(false);
+        } else if (event.type === "ai_thinking") {
+          setCurrentMove(null);
+          setAiThinking(true);
         } else if (event.type === "fen") {
           setFen(event.fen);
         } else if (event.type === "move") {
+          setCurrentMove(null);
+          setAiThinking(false);
           setFen(event.fen);
           setProgress(Math.round(event.progress * 100));
           addLog(`Move ${event.moveNum}: ${event.move} (${Math.round(event.progress * 100)}%)`);
+        } else if (event.type === "wrong_move") {
+          addLog(`Wrong move! Expected ${event.expected}, robot played ${event.actual}. Encoding corrupted.`);
+          setStatus("error");
         } else if (event.type === "done") {
+          setCurrentMove(null);
+          setAiThinking(false);
           addLog(`Done! All bits encoded in ${event.whiteMoves.length} White moves.`);
           addLog(`Game URL: ${event.url}`);
           setGameUrl(event.url);
@@ -107,6 +124,35 @@ export default function EncoderPanel() {
       {status === "running" && (
         <div className="progress-bar">
           <div className="progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+      )}
+
+      {currentMove && (
+        <div style={{
+          background: "#1a472a",
+          color: "#fff",
+          borderRadius: "8px",
+          padding: "14px 20px",
+          margin: "12px 0",
+          display: "flex",
+          alignItems: "center",
+          gap: "12px",
+          fontSize: "1.1rem",
+        }}>
+          <span style={{ opacity: 0.75, fontSize: "0.85rem" }}>Move {currentMove.moveNum} — SenseRobot plays:</span>
+          <span style={{ fontWeight: "700", fontSize: "1.5rem", letterSpacing: "0.04em" }}>{currentMove.san}</span>
+        </div>
+      )}
+      {aiThinking && (
+        <div style={{
+          background: "#2a2a3a",
+          color: "#aaa",
+          borderRadius: "8px",
+          padding: "10px 20px",
+          margin: "12px 0",
+          fontSize: "0.9rem",
+        }}>
+          AI thinking…
         </div>
       )}
 
