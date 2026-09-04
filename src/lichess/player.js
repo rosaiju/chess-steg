@@ -1,5 +1,6 @@
 import { Chess } from "chess.js";
 import { encrypt } from "../steg/crypto.js";
+import { rankCandidates } from "../steg/stockfish.js";
 import { createAIGame, makeMove, streamGame, challengeUser, streamAccountEvents } from "./api.js";
 
 function bytesToBits(bytes) {
@@ -65,9 +66,10 @@ class StegSession {
     }
   }
 
-  // Pick the next White move that encodes the next bits chunk
+  // Pick the next White move that encodes the next bits chunk.
+  // Uses Stockfish to choose the best-looking move within the encoding equivalence class.
   // Returns { san, uci } — san for display, uci for Lichess API
-  nextEncodingMove() {
+  async nextEncodingMove() {
     if (this.isDone) return null;
     let verboseMoves = this.chess.moves({ verbose: true });
     if (verboseMoves.length === 0 || this.chess.isGameOver()) return null;
@@ -76,8 +78,8 @@ class StegSession {
     const nonKing = verboseMoves.filter((m) => m.piece !== "k");
     if (nonKing.length > 0) verboseMoves = nonKing;
 
-    // Sort by quality first (better moves at low indices), UCI as tiebreak.
-    // Deterministic — decoder must mirror this exactly.
+    // Quality sort determines the INDEX MAPPING — decoder mirrors this exactly.
+    // Stockfish only picks WHICH candidate within the equivalence class to play.
     verboseMoves.sort(qualitySort);
 
     // Fallback: fewer than ENCODING_PATTERNS moves — play best, encode 0 bits
@@ -86,8 +88,6 @@ class StegSession {
       return { san: m.san, uci: m.from + m.to + (m.promotion || "") };
     }
 
-    // Modular encoding: bits = moveIndex % ENCODING_PATTERNS
-    // Multiple moves encode the same pattern; pick the best-quality one.
     const remaining = this.allBits.length - this.bitIndex;
     const bitsToUse = Math.min(ENCODING_BITS, remaining);
     const b = parseInt(
@@ -95,19 +95,27 @@ class StegSession {
       2
     );
 
-    // Walk candidates: indices b, b+16, b+32, … — pick first non-mating move
-    let chosen = null;
+    // Collect all valid candidates: indices b, b+16, b+32, …
+    // (skip any that accidentally deliver checkmate mid-encoding)
+    const candidates = [];
     for (let idx = b; idx < verboseMoves.length; idx += ENCODING_PATTERNS) {
       const m = verboseMoves[idx];
-      // Skip if this move accidentally delivers checkmate (need more moves to finish encoding)
       const temp = new Chess(this.chess.fen());
       temp.move(m.san);
-      if (temp.isCheckmate()) continue;
-      chosen = m;
-      break;
+      if (!temp.isCheckmate()) candidates.push(m);
     }
-    // Fallback: all candidates checkmate — extremely rare, just play the first candidate
-    if (!chosen) chosen = verboseMoves[b];
+    if (candidates.length === 0) candidates.push(verboseMoves[b]); // extremely rare fallback
+
+    // Use Stockfish to pick the highest-quality candidate
+    let chosen;
+    if (candidates.length === 1) {
+      chosen = candidates[0];
+    } else {
+      const candidateUCIs = candidates.map((m) => m.from + m.to + (m.promotion || ""));
+      const ranked = await rankCandidates(this.chess.fen(), candidateUCIs);
+      const bestUCI = ranked[0];
+      chosen = candidates.find((m) => m.from + m.to + (m.promotion || "") === bestUCI) ?? candidates[0];
+    }
 
     this.bitIndex += bitsToUse;
     return { san: chosen.san, uci: chosen.from + chosen.to + (chosen.promotion || "") };
@@ -175,20 +183,22 @@ export async function playEncodedGame(plaintext, password, opponentUsername, onE
     if (isWhiteTurn && !rebuilt.isGameOver()) {
       let move;
       if (!session.isDone) {
-        // Still encoding — pick a steganographic move
-        move = session.nextEncodingMove();
+        // Still encoding — pick a steganographic move (Stockfish-ranked)
+        move = await session.nextEncodingMove();
         if (!move) break;
         if (session.isDone) {
           // Just encoded the last bit — notify UI
           onEvent({ type: "encoded", gameId, url: `https://lichess.org/${gameId}`, whiteMoves: [...whiteMoves] });
         }
       } else {
-        // Encoding done — keep playing quality moves until game ends naturally
+        // Encoding done — play Stockfish's best move until game ends naturally
         let pool = session.chess.moves({ verbose: true });
         const nonKing = pool.filter((m) => m.piece !== "k");
         if (nonKing.length > 0) pool = nonKing;
-        pool.sort(qualitySort);
-        const m = pool[0];
+        const poolUCIs = pool.map((m) => m.from + m.to + (m.promotion || ""));
+        const ranked = await rankCandidates(session.chess.fen(), poolUCIs);
+        const bestUCI = ranked[0] ?? poolUCIs[0];
+        const m = pool.find((m) => m.from + m.to + (m.promotion || "") === bestUCI) ?? pool[0];
         move = { san: m.san, uci: m.from + m.to + (m.promotion || "") };
       }
 

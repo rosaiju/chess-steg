@@ -1,0 +1,78 @@
+// Thin UCI wrapper around the Stockfish Web Worker.
+// Singleton engine — initialized once, reused for every move.
+
+let worker = null;
+let initResolve = null;
+const initPromise = new Promise((r) => { initResolve = r; });
+let queryResolve = null;
+let scores = null; // Map<uci, bestCpSeen>
+
+function ensureWorker() {
+  if (worker) return;
+  worker = new Worker("/stockfish.js");
+  worker.onmessage = ({ data }) => {
+    const line = typeof data === "string" ? data : String(data);
+
+    // Engine ready
+    if (line === "uciok") {
+      initResolve?.();
+      return;
+    }
+
+    if (!queryResolve) return;
+
+    // Parse ranked moves from MultiPV info lines:
+    // "info depth N ... multipv K score cp 30 ... pv e2e4 ..."
+    if (line.startsWith("info") && line.includes(" pv ") && line.includes("score")) {
+      const pvMatch = line.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
+      const cpMatch = line.match(/score cp (-?\d+)/);
+      const mateMatch = line.match(/score mate (-?\d+)/);
+      if (pvMatch) {
+        const uci = pvMatch[1];
+        const score = mateMatch
+          ? parseInt(mateMatch[1]) > 0 ? 1e6 : -1e6
+          : cpMatch ? parseInt(cpMatch[1]) : 0;
+        // Keep the highest score seen for each move (deepest iteration)
+        if (!scores.has(uci) || score > scores.get(uci)) {
+          scores.set(uci, score);
+        }
+      }
+    }
+
+    // Analysis complete
+    if (line.startsWith("bestmove")) {
+      const result = new Map(scores);
+      queryResolve(result);
+      queryResolve = null;
+      scores = null;
+    }
+  };
+  worker.postMessage("uci");
+}
+
+// Given a FEN and a list of candidate UCI moves, returns them sorted by
+// Stockfish centipawn score — best move first.
+// Falls back to input order for moves Stockfish didn't rank.
+export async function rankCandidates(fen, candidates) {
+  if (candidates.length <= 1) return [...candidates];
+
+  ensureWorker();
+  await initPromise;
+
+  return new Promise((resolve) => {
+    scores = new Map();
+    queryResolve = (results) => {
+      const ranked = [...candidates].sort((a, b) => {
+        const sa = results.get(a) ?? -99999;
+        const sb = results.get(b) ?? -99999;
+        return sb - sa;
+      });
+      resolve(ranked);
+    };
+
+    // Ask for top 20 moves so most/all candidates get scored
+    worker.postMessage("setoption name MultiPV value 20");
+    worker.postMessage(`position fen ${fen}`);
+    worker.postMessage("go movetime 100"); // 100ms — fast enough for a live game
+  });
+}
