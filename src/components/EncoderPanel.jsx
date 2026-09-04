@@ -7,6 +7,7 @@ const INITIAL_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 export default function EncoderPanel() {
   const [message, setMessage] = useState("HELLO DR WANG");
   const [password, setPassword] = useState("");
+  const [opponent, setOpponent] = useState("");
   const [status, setStatus] = useState("idle"); // idle | running | done | error
   const [log, setLog] = useState([]);
   const [fen, setFen] = useState(INITIAL_FEN);
@@ -43,8 +44,18 @@ export default function EncoderPanel() {
     setProgress(0);
 
     try {
-      await playEncodedGame(message, password, (event) => {
-        if (event.type === "creating") {
+      await playEncodedGame(message, password, opponent.trim() || null, (event) => {
+        if (event.type === "challenging") {
+          addLog(`Challenging ${event.opponent} on Lichess...`);
+        } else if (event.type === "waiting") {
+          addLog(`Challenge sent! Waiting for ${event.opponent} to accept...`);
+          setGameUrl(event.url);
+        } else if (event.type === "started") {
+          addLog(`${opponent.trim()} accepted! Encoding message into moves...`);
+        } else if (event.type === "declined") {
+          addLog(`Challenge declined by ${event.opponent}.`);
+          setStatus("error");
+        } else if (event.type === "creating") {
           addLog("Creating game vs Lichess AI...");
         } else if (event.type === "created") {
           addLog(`Game created: ${event.url}`);
@@ -61,7 +72,7 @@ export default function EncoderPanel() {
           setGameUrl(event.url);
           setStatus("done");
         } else if (event.type === "ended") {
-          addLog(`Game ended unexpectedly: ${event.status}`);
+          addLog(`Game ended: ${event.status}`);
           setStatus("error");
         }
       });
@@ -93,6 +104,16 @@ export default function EncoderPanel() {
           onChange={(e) => setPassword(e.target.value)}
           disabled={status === "running"}
           placeholder="Shared secret key"
+        />
+      </div>
+
+      <div className="field">
+        <label>Opponent's Lichess Username <span style={{ fontWeight: "normal", opacity: 0.6 }}>(leave blank for AI)</span></label>
+        <input
+          value={opponent}
+          onChange={(e) => setOpponent(e.target.value)}
+          disabled={status === "running"}
+          placeholder="e.g. drwang (optional)"
         />
       </div>
 

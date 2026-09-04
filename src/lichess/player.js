@@ -1,6 +1,6 @@
 import { Chess } from "chess.js";
 import { encrypt } from "../steg/crypto.js";
-import { createAIGame, makeMove, streamGame } from "./api.js";
+import { createAIGame, makeMove, streamGame, challengeUser, resignGame, streamAccountEvents } from "./api.js";
 
 function bytesToBits(bytes) {
   return Array.from(bytes)
@@ -122,16 +122,37 @@ async function buildBits(plaintext, password) {
   return lenBits + bytesToBits(cipherBytes);
 }
 
-// Play the full encoded game on Lichess vs AI.
-// Calls onEvent({ type, move?, gameId?, progress?, status }) for UI updates.
-export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
+// Play the full encoded game on Lichess.
+// opponentUsername: Lichess username to challenge (human game); null/empty = vs AI level 1.
+// Calls onEvent({ type, ... }) for UI updates.
+export async function playEncodedGame(plaintext, password, opponentUsername, onEvent = () => {}) {
   const allBits = await buildBits(plaintext, password);
   const session = new StegSession(allBits);
+  let gameId;
 
-  onEvent({ type: "creating" });
-  const game = await createAIGame("white", 1);
-  const gameId = game.id;
-  onEvent({ type: "created", gameId, url: `https://lichess.org/${gameId}` });
+  if (opponentUsername) {
+    // Human opponent: challenge by username, wait for them to accept
+    onEvent({ type: "challenging", opponent: opponentUsername });
+    const result = await challengeUser(opponentUsername);
+    gameId = result.challenge.id;
+    onEvent({ type: "waiting", gameId, opponent: opponentUsername, url: `https://lichess.org/${gameId}` });
+
+    // Stream account events until the challenge is accepted (gameStart) or declined
+    for await (const event of streamAccountEvents()) {
+      if (event.type === "gameStart" && event.game?.gameId === gameId) break;
+      if (event.type === "challengeDeclined") {
+        onEvent({ type: "declined", opponent: opponentUsername });
+        return { gameId, url: `https://lichess.org/${gameId}`, whiteMoves: [] };
+      }
+    }
+    onEvent({ type: "started", gameId, url: `https://lichess.org/${gameId}` });
+  } else {
+    // AI fallback
+    onEvent({ type: "creating" });
+    const game = await createAIGame("white", 1);
+    gameId = game.id;
+    onEvent({ type: "created", gameId, url: `https://lichess.org/${gameId}` });
+  }
 
   const whiteMoves = [];
 
@@ -148,7 +169,6 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
     }
     session.chess = rebuilt;
 
-    // Keep board in sync after every server event (shows Black's moves too)
     if (serverMoves.length > 0) {
       onEvent({ type: "fen", fen: rebuilt.fen() });
     }
@@ -162,7 +182,6 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
       await makeMove(gameId, move.uci);
       whiteMoves.push(move.san);
 
-      // Apply our move to rebuilt so we can send the updated FEN for display
       rebuilt.move({ from: move.uci.slice(0, 2), to: move.uci.slice(2, 4), promotion: move.uci[4] || undefined });
 
       onEvent({
@@ -177,6 +196,8 @@ export async function playEncodedGame(plaintext, password, onEvent = () => {}) {
 
     if (session.isDone) {
       onEvent({ type: "done", gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
+      // Resign so the game ends immediately and the opponent can decode right away
+      if (opponentUsername) await resignGame(gameId);
       break;
     }
 
