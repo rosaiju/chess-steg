@@ -199,7 +199,7 @@ export default function EncoderPanel() {
           margin: "12px 0",
           fontSize: "0.9rem",
         }}>
-          Opponent thinking…
+          Waiting for opponent…
         </div>
       )}
 
