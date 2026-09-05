@@ -16,6 +16,10 @@ function capacityBits(numMoves) {
 const ENCODING_BITS = 4;
 const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 16
 
+// First 4 White moves are always played as-is (not encoding) to guarantee king safety.
+// Decoder must skip these same moves. UCI: e4, Nf3, Bc4, O-O.
+const PREAMBLE_MOVES = ["e2e4", "g1f3", "f1c4", "e1g1"];
+
 // Deterministic quality sort — used by both encoder and decoder.
 // Better moves get lower indices so the encoding prefers them statistically.
 const PIECE_VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
@@ -44,13 +48,23 @@ class StegSession {
     this.allBits = allBits;
     this.bitIndex = 0;
     this.chess = new Chess();
+    this._whiteMoveCount = 0; // total White moves made (including preamble)
+  }
+
+  get preambleDone() {
+    return this._whiteMoveCount >= PREAMBLE_MOVES.length;
+  }
+
+  recordWhiteMove() {
+    this._whiteMoveCount++;
   }
 
   get isDone() {
-    return this.bitIndex >= this.allBits.length;
+    return this.preambleDone && this.bitIndex >= this.allBits.length;
   }
 
   get progress() {
+    if (!this.preambleDone) return 0;
     return this.allBits.length === 0
       ? 1
       : this.bitIndex / this.allBits.length;
@@ -72,6 +86,13 @@ class StegSession {
   // Uses Stockfish to choose the best-looking move within the encoding equivalence class.
   // Returns { san, uci } — san for display, uci for Lichess API
   async nextEncodingMove() {
+    // Play the fixed opening preamble before encoding begins.
+    if (!this.preambleDone) {
+      const uci = PREAMBLE_MOVES[this._whiteMoveCount];
+      const from = uci.slice(0, 2), to = uci.slice(2, 4);
+      const m = this.chess.moves({ verbose: true }).find((mv) => mv.from === from && mv.to === to);
+      return m ? { san: m.san, uci } : null;
+    }
     if (this.isDone) return null;
     let verboseMoves = this.chess.moves({ verbose: true });
     if (verboseMoves.length === 0 || this.chess.isGameOver()) return null;
@@ -219,6 +240,7 @@ export async function playEncodedGame(plaintext, password, opponentUsername, onE
 
       await makeMove(gameId, move.uci);
       whiteMoves.push(move.san);
+      session.recordWhiteMove();
       rebuilt.move({ from: move.uci.slice(0, 2), to: move.uci.slice(2, 4), promotion: move.uci[4] || undefined });
 
       onEvent({

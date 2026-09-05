@@ -19,6 +19,7 @@ function capacityBits(numMoves) {
 
 const ENCODING_BITS = 4;
 const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 16
+const PREAMBLE_LENGTH = 4; // must match PREAMBLE_MOVES.length in player.js
 
 // Get sorted legal moves (same canonical order as encoder)
 function getSortedMoves(chess) {
@@ -60,30 +61,36 @@ export async function decodeFromMoves(allMoves, password, onMove = () => {}) {
   const chess = new Chess();
   let allBits = "";
   let whiteMove = 0;
+  let whiteMoveTotal = 0; // includes preamble moves
 
   for (let i = 0; i < allMoves.length; i++) {
     const isWhite = i % 2 === 0;
     const uciMove = allMoves[i]; // Lichess returns UCI (e.g. "e2e4")
 
     if (isWhite) {
-      let verboseMoves = getSortedVerboseMoves(chess);
+      whiteMoveTotal++;
+      if (whiteMoveTotal > PREAMBLE_LENGTH) {
+        // Only decode after preamble — mirrors player.js exactly
+        let verboseMoves = getSortedVerboseMoves(chess);
 
-      // Variable capacity — mirrors player.js exactly:
-      // floor(log2(n)) bits capped at ENCODING_BITS; 1 move → 0 bits (forced).
-      const moveBits = Math.min(ENCODING_BITS, Math.floor(Math.log2(verboseMoves.length)));
-      if (moveBits > 0) {
-        const PATTERNS = 1 << moveBits;
-        const moveIndex = verboseMoves.findIndex(
-          (m) => m.from + m.to + (m.promotion || "") === uciMove
-        );
-        if (moveIndex === -1) throw new Error(`Illegal White move: ${uciMove}`);
-        const encoded = moveIndex % PATTERNS;
-        const bits = encoded.toString(2).padStart(moveBits, "0");
-        allBits += bits;
-        whiteMove++;
-        onMove({ moveNum: whiteMove, uci: uciMove, index: encoded, bits });
+        // Variable capacity — mirrors player.js exactly:
+        // floor(log2(n)) bits capped at ENCODING_BITS; 1 move → 0 bits (forced).
+        const moveBits = Math.min(ENCODING_BITS, Math.floor(Math.log2(verboseMoves.length)));
+        if (moveBits > 0) {
+          const PATTERNS = 1 << moveBits;
+          const moveIndex = verboseMoves.findIndex(
+            (m) => m.from + m.to + (m.promotion || "") === uciMove
+          );
+          if (moveIndex === -1) throw new Error(`Illegal White move: ${uciMove}`);
+          const encoded = moveIndex % PATTERNS;
+          const bits = encoded.toString(2).padStart(moveBits, "0");
+          allBits += bits;
+          whiteMove++;
+          onMove({ moveNum: whiteMove, uci: uciMove, index: encoded, bits });
+        }
+        // moveBits === 0: single forced move, extract 0 bits
       }
-      // moveBits === 0: single forced move, extract 0 bits
+      // else: preamble move — play it on the board but extract 0 bits
     }
 
     // chess.js accepts UCI-style objects; parse from/to from the UCI string
