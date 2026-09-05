@@ -1,7 +1,7 @@
 import { Chess } from "chess.js";
 import { encrypt } from "../steg/crypto.js";
 import { rankCandidates } from "../steg/stockfish.js";
-import { createAIGame, makeMove, streamGame, challengeUser, streamAccountEvents } from "./api.js";
+import { createAIGame, makeMove, streamGame, challengeUser, streamAccountEvents, resignGame } from "./api.js";
 
 function bytesToBits(bytes) {
   return Array.from(bytes)
@@ -21,10 +21,12 @@ const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 16
 const PIECE_VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 function moveScore(m) {
   let s = 0;
-  if (m.captured) s += PIECE_VAL[m.captured] * 100;  // captures first
-  if (m.promotion) s += PIECE_VAL[m.promotion] * 50; // promotions
+  if (m.captured) s -= PIECE_VAL[m.captured] * 100;  // captures LAST — quiet moves encode first
+  if (m.promotion) s += PIECE_VAL[m.promotion] * 50; // promotions near front
   // Penalise rook/queen shuffles along the back rank (they keep appearing at index 0)
   if ((m.piece === "r" || m.piece === "q") && m.from[1] === m.to[1] && m.from[1] === "1") s -= 40;
+  // Deprioritize non-castling king moves; castling flags are "k" (kingside) and "q" (queenside)
+  if (m.piece === "k" && !m.flags.includes("k") && !m.flags.includes("q")) s -= 200;
   return s;
 }
 function qualitySort(a, b) {
@@ -74,37 +76,45 @@ class StegSession {
     let verboseMoves = this.chess.moves({ verbose: true });
     if (verboseMoves.length === 0 || this.chess.isGameOver()) return null;
 
-    // Avoid king moves to keep White's king safe (unless forced)
-    const nonKing = verboseMoves.filter((m) => m.piece !== "k");
-    if (nonKing.length > 0) verboseMoves = nonKing;
-
     // Quality sort determines the INDEX MAPPING — decoder mirrors this exactly.
     // Stockfish only picks WHICH candidate within the equivalence class to play.
     verboseMoves.sort(qualitySort);
 
-    // Fallback: fewer than ENCODING_PATTERNS moves — play best, encode 0 bits
-    if (verboseMoves.length < ENCODING_PATTERNS) {
-      const m = verboseMoves[0];
+    // Variable-capacity encoding: floor(log2(n)) bits, capped at ENCODING_BITS.
+    // Encoding always progresses regardless of how many moves are available.
+    // 1 move → 0 bits (forced); 2–3 → 1 bit; 4–7 → 2 bits; 8–15 → 3 bits; 16+ → 4 bits.
+    const moveBits = Math.min(ENCODING_BITS, Math.floor(Math.log2(verboseMoves.length)));
+
+    if (moveBits === 0) {
+      // Only 1 legal non-king move — forced, encode 0 bits. Prefer non-capture.
+      const m = verboseMoves.find((mv) => !mv.captured) ?? verboseMoves[0];
       return { san: m.san, uci: m.from + m.to + (m.promotion || "") };
     }
 
+    const PATTERNS = 1 << moveBits; // 2, 4, 8, or 16
+
     const remaining = this.allBits.length - this.bitIndex;
-    const bitsToUse = Math.min(ENCODING_BITS, remaining);
+    const bitsToUse = Math.min(moveBits, remaining);
     const b = parseInt(
-      this.allBits.slice(this.bitIndex, this.bitIndex + bitsToUse).padEnd(ENCODING_BITS, "0"),
+      this.allBits.slice(this.bitIndex, this.bitIndex + bitsToUse).padEnd(moveBits, "0"),
       2
     );
 
-    // Collect all valid candidates: indices b, b+16, b+32, …
+    // Collect all valid candidates: indices b, b+PATTERNS, b+2*PATTERNS, …
     // (skip any that accidentally deliver checkmate mid-encoding)
-    const candidates = [];
-    for (let idx = b; idx < verboseMoves.length; idx += ENCODING_PATTERNS) {
+    let candidates = [];
+    for (let idx = b; idx < verboseMoves.length; idx += PATTERNS) {
       const m = verboseMoves[idx];
       const temp = new Chess(this.chess.fen());
       temp.move(m.san);
       if (!temp.isCheckmate()) candidates.push(m);
     }
     if (candidates.length === 0) candidates.push(verboseMoves[b]); // extremely rare fallback
+
+    // Prefer non-captures — captures create material imbalance and cause early resignation.
+    // The decoder accepts any candidate at index b, b+PATTERNS, … (all decode to the same bits).
+    const nonCaptures = candidates.filter((m) => !m.captured);
+    if (nonCaptures.length > 0) candidates = nonCaptures;
 
     // Use Stockfish to pick the highest-quality candidate
     let chosen;
@@ -113,8 +123,7 @@ class StegSession {
     } else {
       const candidateUCIs = candidates.map((m) => m.from + m.to + (m.promotion || ""));
       const ranked = await rankCandidates(this.chess.fen(), candidateUCIs);
-      const bestUCI = ranked[0];
-      chosen = candidates.find((m) => m.from + m.to + (m.promotion || "") === bestUCI) ?? candidates[0];
+      chosen = candidates.find((m) => m.from + m.to + (m.promotion || "") === ranked[0]) ?? candidates[0];
     }
 
     this.bitIndex += bitsToUse;
@@ -140,15 +149,26 @@ export async function playEncodedGame(plaintext, password, opponentUsername, onE
   if (opponentUsername) {
     onEvent({ type: "challenging", opponent: opponentUsername });
     const result = await challengeUser(opponentUsername);
-    gameId = result.challenge.id;
+    gameId = (result.challenge ?? result).id;
     onEvent({ type: "waiting", gameId, opponent: opponentUsername, url: `https://lichess.org/${gameId}` });
 
-    for await (const event of streamAccountEvents()) {
-      if (event.type === "gameStart" && event.game?.gameId === gameId) break;
-      if (event.type === "challengeDeclined") {
-        onEvent({ type: "declined", opponent: opponentUsername });
-        return;
-      }
+    const acceptResult = await Promise.race([
+      (async () => {
+        for await (const event of streamAccountEvents()) {
+          if (event.type === "gameStart" && event.game?.gameId === gameId) return "accepted";
+          if (event.type === "challengeDeclined") return "declined";
+        }
+        return "declined";
+      })(),
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), 2 * 60 * 1000)),
+    ]);
+    if (acceptResult === "timeout") {
+      onEvent({ type: "timeout" });
+      return;
+    }
+    if (acceptResult === "declined") {
+      onEvent({ type: "declined", opponent: opponentUsername });
+      return;
     }
     onEvent({ type: "started", gameId, url: `https://lichess.org/${gameId}` });
   } else {
@@ -191,15 +211,10 @@ export async function playEncodedGame(plaintext, password, opponentUsername, onE
           onEvent({ type: "encoded", gameId, url: `https://lichess.org/${gameId}`, whiteMoves: [...whiteMoves] });
         }
       } else {
-        // Encoding done — play Stockfish's best move until game ends naturally
-        let pool = session.chess.moves({ verbose: true });
-        const nonKing = pool.filter((m) => m.piece !== "k");
-        if (nonKing.length > 0) pool = nonKing;
-        const poolUCIs = pool.map((m) => m.from + m.to + (m.promotion || ""));
-        const ranked = await rankCandidates(session.chess.fen(), poolUCIs);
-        const bestUCI = ranked[0] ?? poolUCIs[0];
-        const m = pool.find((m) => m.from + m.to + (m.promotion || "") === bestUCI) ?? pool[0];
-        move = { san: m.san, uci: m.from + m.to + (m.promotion || "") };
+        // Encoding done — resign immediately so the game is archived and decodable
+        try { await resignGame(gameId); } catch { /* ignore — game may already be over */ }
+        onEvent({ type: "done", status: "resign", gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
+        break;
       }
 
       await makeMove(gameId, move.uci);
@@ -220,7 +235,11 @@ export async function playEncodedGame(plaintext, password, opponentUsername, onE
 
     // Break only when game ends naturally
     if (state.status && !["created", "started"].includes(state.status)) {
-      onEvent({ type: "done", status: state.status, gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
+      if (!session.isDone) {
+        onEvent({ type: "incomplete", gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
+      } else {
+        onEvent({ type: "done", status: state.status, gameId, url: `https://lichess.org/${gameId}`, whiteMoves });
+      }
       break;
     }
   }

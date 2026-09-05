@@ -29,9 +29,11 @@ function getSortedMoves(chess) {
 const PIECE_VAL = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 function moveScore(m) {
   let s = 0;
-  if (m.captured) s += PIECE_VAL[m.captured] * 100;
+  if (m.captured) s -= PIECE_VAL[m.captured] * 100; // captures LAST — must mirror player.js
   if (m.promotion) s += PIECE_VAL[m.promotion] * 50;
   if ((m.piece === "r" || m.piece === "q") && m.from[1] === m.to[1] && m.from[1] === "1") s -= 40;
+  // Deprioritize non-castling king moves; castling flags are "k" (kingside) and "q" (queenside)
+  if (m.piece === "k" && !m.flags.includes("k") && !m.flags.includes("q")) s -= 200;
   return s;
 }
 function qualitySort(a, b) {
@@ -49,14 +51,15 @@ function getSortedVerboseMoves(chess) {
 
 // Decode a full game (both colors) — extracts bits only from White's moves.
 // Use this when the game was played vs Lichess AI.
-export async function decodeFromGameId(gameId, password) {
+export async function decodeFromGameId(gameId, password, onMove) {
   const moves = await fetchGameMoves(gameId);
-  return decodeFromMoves(moves, password);
+  return decodeFromMoves(moves, password, onMove);
 }
 
-export async function decodeFromMoves(allMoves, password) {
+export async function decodeFromMoves(allMoves, password, onMove = () => {}) {
   const chess = new Chess();
   let allBits = "";
+  let whiteMove = 0;
 
   for (let i = 0; i < allMoves.length; i++) {
     const isWhite = i % 2 === 0;
@@ -64,18 +67,23 @@ export async function decodeFromMoves(allMoves, password) {
 
     if (isWhite) {
       let verboseMoves = getSortedVerboseMoves(chess);
-      // Mirror encoder: exclude king moves unless forced
-      const nonKing = verboseMoves.filter((m) => m.piece !== "k");
-      if (nonKing.length > 0) verboseMoves = nonKing;
 
-      if (verboseMoves.length >= ENCODING_PATTERNS) {
+      // Variable capacity — mirrors player.js exactly:
+      // floor(log2(n)) bits capped at ENCODING_BITS; 1 move → 0 bits (forced).
+      const moveBits = Math.min(ENCODING_BITS, Math.floor(Math.log2(verboseMoves.length)));
+      if (moveBits > 0) {
+        const PATTERNS = 1 << moveBits;
         const moveIndex = verboseMoves.findIndex(
           (m) => m.from + m.to + (m.promotion || "") === uciMove
         );
         if (moveIndex === -1) throw new Error(`Illegal White move: ${uciMove}`);
-        allBits += (moveIndex % ENCODING_PATTERNS).toString(2).padStart(ENCODING_BITS, "0");
+        const encoded = moveIndex % PATTERNS;
+        const bits = encoded.toString(2).padStart(moveBits, "0");
+        allBits += bits;
+        whiteMove++;
+        onMove({ moveNum: whiteMove, uci: uciMove, index: encoded, bits });
       }
-      // If < ENCODING_PATTERNS moves: forced/no-encode move, extract 0 bits
+      // moveBits === 0: single forced move, extract 0 bits
     }
 
     // chess.js accepts UCI-style objects; parse from/to from the UCI string
@@ -101,7 +109,11 @@ async function finishDecode(allBits, password) {
   if (cipherBits.length < cipherByteLen * 8) throw new Error("Not enough moves to decode the full message.");
   const cipherBytes = bitsToBytes(cipherBits);
   const cipherB64 = btoa(String.fromCharCode(...cipherBytes));
-  return await decrypt(cipherB64, password);
+  try {
+    return await decrypt(cipherB64, password);
+  } catch {
+    throw new Error("Wrong password or game URL");
+  }
 }
 
 // Decode a list of SAN moves back into the plaintext message (single-player, for tests)
