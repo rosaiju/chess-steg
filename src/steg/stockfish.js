@@ -3,7 +3,10 @@
 
 let worker = null;
 let initResolve = null;
-const initPromise = new Promise((r) => { initResolve = r; });
+const initPromise = Promise.race([
+  new Promise((r) => { initResolve = r; }),
+  new Promise((_, rej) => setTimeout(() => rej(new Error("Stockfish init timeout")), 5000)),
+]);
 let queryResolve = null;
 let scores = null; // Map<uci, bestCpSeen>
 
@@ -50,6 +53,33 @@ function ensureWorker() {
   worker.postMessage("uci");
 }
 
+// Given a FEN and a list of candidate UCI moves, picks the one whose
+// resulting position is closest to 0cp (most balanced — prevents snowballing).
+export async function pickBalanced(fen, candidates) {
+  if (candidates.length <= 1) return candidates[0] ?? null;
+
+  ensureWorker();
+  try { await initPromise; } catch { return candidates[0]; }
+
+  return Promise.race([
+    new Promise((resolve) => {
+      scores = new Map();
+      queryResolve = (results) => {
+        const best = [...candidates].sort((a, b) => {
+          const sa = Math.abs(results.get(a) ?? 99999);
+          const sb = Math.abs(results.get(b) ?? 99999);
+          return sa - sb; // ascending |score| → closest to 0 first
+        });
+        resolve(best[0]);
+      };
+      worker.postMessage("setoption name MultiPV value 20");
+      worker.postMessage(`position fen ${fen}`);
+      worker.postMessage("go movetime 100");
+    }),
+    new Promise((resolve) => setTimeout(() => resolve(candidates[0]), 2000)),
+  ]);
+}
+
 // Given a FEN and a list of candidate UCI moves, returns them sorted by
 // Stockfish centipawn score — best move first.
 // Falls back to input order for moves Stockfish didn't rank.
@@ -57,22 +87,25 @@ export async function rankCandidates(fen, candidates) {
   if (candidates.length <= 1) return [...candidates];
 
   ensureWorker();
-  await initPromise;
+  try { await initPromise; } catch { return [...candidates]; }
 
-  return new Promise((resolve) => {
-    scores = new Map();
-    queryResolve = (results) => {
-      const ranked = [...candidates].sort((a, b) => {
-        const sa = results.get(a) ?? -99999;
-        const sb = results.get(b) ?? -99999;
-        return sb - sa;
-      });
-      resolve(ranked);
-    };
+  return Promise.race([
+    new Promise((resolve) => {
+      scores = new Map();
+      queryResolve = (results) => {
+        const ranked = [...candidates].sort((a, b) => {
+          const sa = results.get(a) ?? -99999;
+          const sb = results.get(b) ?? -99999;
+          return sb - sa;
+        });
+        resolve(ranked);
+      };
 
-    // Ask for top 20 moves so most/all candidates get scored
-    worker.postMessage("setoption name MultiPV value 20");
-    worker.postMessage(`position fen ${fen}`);
-    worker.postMessage("go movetime 100"); // 100ms — fast enough for a live game
-  });
+      // Ask for top 20 moves so most/all candidates get scored
+      worker.postMessage("setoption name MultiPV value 20");
+      worker.postMessage(`position fen ${fen}`);
+      worker.postMessage("go movetime 100"); // 100ms — fast enough for a live game
+    }),
+    new Promise((resolve) => setTimeout(() => resolve([...candidates]), 2000)),
+  ]);
 }

@@ -7,11 +7,16 @@ const authHeaders = {
 
 // Challenge Lichess AI (level 1 = weakest)
 export async function createAIGame(color = "white", level = 1) {
-  const res = await fetch(`${BASE}/api/challenge/ai`, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ level, color, days: 3 }),
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE}/api/challenge/ai`, {
+      method: "POST",
+      headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ level, color, days: 3 }),
+    });
+  } catch {
+    throw new Error("Network error — check your connection");
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Failed to create game: ${res.status} ${text}`);
@@ -21,10 +26,15 @@ export async function createAIGame(color = "white", level = 1) {
 
 // Make a move in a game
 export async function makeMove(gameId, move) {
-  const res = await fetch(`${BASE}/api/board/game/${gameId}/move/${move}`, {
-    method: "POST",
-    headers: authHeaders,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE}/api/board/game/${gameId}/move/${move}`, {
+      method: "POST",
+      headers: authHeaders,
+    });
+  } catch {
+    throw new Error("Network error — check your connection");
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Move failed (${move}): ${res.status} ${text}`);
@@ -81,16 +91,21 @@ export function parseGameId(input) {
 
 // Challenge a specific Lichess user to a game (challenger plays White, 15+10 clock)
 export async function challengeUser(username) {
-  const res = await fetch(`${BASE}/api/challenge/${encodeURIComponent(username)}`, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      rated: "false",
-      "clock.limit": 900,
-      "clock.increment": 10,
-      color: "white",
-    }),
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE}/api/challenge/${encodeURIComponent(username)}`, {
+      method: "POST",
+      headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        rated: "false",
+        "clock.limit": 900,
+        "clock.increment": 10,
+        color: "white",
+      }),
+    });
+  } catch {
+    throw new Error("Network error — check your connection");
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Failed to challenge ${username}: ${res.status} ${text}`);

@@ -13,12 +13,12 @@ function capacityBits(numMoves) {
   return Math.max(0, Math.floor(Math.log2(numMoves)));
 }
 
-const ENCODING_BITS = 4;
-const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 16
+const ENCODING_BITS = 5;
+const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 32
 
-// First 4 White moves are always played as-is (not encoding) to guarantee king safety.
-// Decoder must skip these same moves. UCI: e4, Nf3, Bc4, O-O.
-const PREAMBLE_MOVES = ["e2e4", "g1f3", "f1c4", "e1g1"];
+// First White move is played as-is (not encoding) to open the position.
+// Decoder must skip this same move.
+const PREAMBLE_MOVES = ["e2e4"];
 
 // Deterministic quality sort — used by both encoder and decoder.
 // Better moves get lower indices so the encoding prefers them statistically.
@@ -29,8 +29,12 @@ function moveScore(m) {
   if (m.promotion) s += PIECE_VAL[m.promotion] * 50; // promotions near front
   // Penalise rook/queen shuffles along the back rank (they keep appearing at index 0)
   if ((m.piece === "r" || m.piece === "q") && m.from[1] === m.to[1] && m.from[1] === "1") s -= 40;
-  // Deprioritize non-castling king moves; castling flags are "k" (kingside) and "q" (queenside)
-  if (m.piece === "k" && !m.flags.includes("k") && !m.flags.includes("q")) s -= 200;
+  // Non-castling king moves go dead last — even behind all captures.
+  if (m.piece === "k" && !m.flags.includes("k") && !m.flags.includes("q")) s -= 10000;
+  // Rim knights are almost always terrible — push to end of sort
+  if (m.piece === "n" && (m.to[0] === "a" || m.to[0] === "h")) s -= 150;
+  // Bishops/knights/queens retreating to back rank (rank 1) are bad
+  if (["n", "b", "q"].includes(m.piece) && m.to[1] === "1") s -= 100;
   return s;
 }
 function qualitySort(a, b) {
@@ -101,9 +105,17 @@ class StegSession {
     // Stockfish only picks WHICH candidate within the equivalence class to play.
     verboseMoves.sort(qualitySort);
 
+    // Hard-filter non-castling king moves when there are enough non-king moves.
+    // Prevents the encoder from ever picking king moves unless truly forced.
+    // Decoder must apply the same filter before looking up the move index.
+    const nonKingMoves = verboseMoves.filter(
+      (m) => m.piece !== "k" || m.flags.includes("k") || m.flags.includes("q")
+    );
+    if (nonKingMoves.length >= ENCODING_PATTERNS) verboseMoves = nonKingMoves;
+
     // Variable-capacity encoding: floor(log2(n)) bits, capped at ENCODING_BITS.
     // Encoding always progresses regardless of how many moves are available.
-    // 1 move → 0 bits (forced); 2–3 → 1 bit; 4–7 → 2 bits; 8–15 → 3 bits; 16+ → 4 bits.
+    // 1 move → 0 bits (forced); 2–3 → 1 bit; 4–7 → 2 bits; 8–15 → 3 bits; 16–31 → 4 bits; 32+ → 5 bits.
     const moveBits = Math.min(ENCODING_BITS, Math.floor(Math.log2(verboseMoves.length)));
 
     if (moveBits === 0) {

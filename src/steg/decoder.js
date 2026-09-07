@@ -17,9 +17,9 @@ function capacityBits(numMoves) {
   return Math.max(0, Math.floor(Math.log2(numMoves)));
 }
 
-const ENCODING_BITS = 4;
-const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 16
-const PREAMBLE_LENGTH = 4; // must match PREAMBLE_MOVES.length in player.js
+const ENCODING_BITS = 5;
+const ENCODING_PATTERNS = 1 << ENCODING_BITS; // 32
+const PREAMBLE_LENGTH = 1; // must match PREAMBLE_MOVES.length in player.js
 
 // Get sorted legal moves (same canonical order as encoder)
 function getSortedMoves(chess) {
@@ -33,8 +33,12 @@ function moveScore(m) {
   if (m.captured) s -= PIECE_VAL[m.captured] * 100; // captures LAST — must mirror player.js
   if (m.promotion) s += PIECE_VAL[m.promotion] * 50;
   if ((m.piece === "r" || m.piece === "q") && m.from[1] === m.to[1] && m.from[1] === "1") s -= 40;
-  // Deprioritize non-castling king moves; castling flags are "k" (kingside) and "q" (queenside)
-  if (m.piece === "k" && !m.flags.includes("k") && !m.flags.includes("q")) s -= 200;
+  // Non-castling king moves go dead last — even behind all captures.
+  if (m.piece === "k" && !m.flags.includes("k") && !m.flags.includes("q")) s -= 10000;
+  // Rim knights are almost always terrible — push to end of sort
+  if (m.piece === "n" && (m.to[0] === "a" || m.to[0] === "h")) s -= 150;
+  // Bishops/knights/queens retreating to back rank (rank 1) are bad
+  if (["n", "b", "q"].includes(m.piece) && m.to[1] === "1") s -= 100;
   return s;
 }
 function qualitySort(a, b) {
@@ -47,7 +51,14 @@ function qualitySort(a, b) {
 
 // Get verbose moves in quality order (must mirror player.js canonical order)
 function getSortedVerboseMoves(chess) {
-  return chess.moves({ verbose: true }).sort(qualitySort);
+  let moves = chess.moves({ verbose: true }).sort(qualitySort);
+  // Hard-filter non-castling king moves when we have enough non-king moves.
+  // Must mirror player.js exactly.
+  const nonKingMoves = moves.filter(
+    (m) => m.piece !== "k" || m.flags.includes("k") || m.flags.includes("q")
+  );
+  if (nonKingMoves.length >= ENCODING_PATTERNS) moves = nonKingMoves;
+  return moves;
 }
 
 // Decode a full game (both colors) — extracts bits only from White's moves.

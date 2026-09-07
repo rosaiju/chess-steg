@@ -15,6 +15,7 @@ export default function EncoderPanel() {
   const [progress, setProgress] = useState(0);
   const [currentMove, setCurrentMove] = useState(null); // { san, moveNum }
   const [aiThinking, setAiThinking] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
   const logRef = useRef(null);
   const panelRef = useRef(null);
   const [boardWidth, setBoardWidth] = useState(320);
@@ -84,10 +85,19 @@ export default function EncoderPanel() {
           addLog(`✓ Message encoded in ${event.whiteMoves.length} White moves. Keep playing until the game ends.`);
           setGameUrl(event.url);
           setStatus("encoded");
+        } else if (event.type === "incomplete") {
+          setCurrentMove(null);
+          setAiThinking(false);
+          addLog("Game ended before encoding was complete — opponent resigned too early. The message cannot be decoded.");
+          setGameUrl(event.url);
+          setStatus("error");
+        } else if (event.type === "timeout") {
+          addLog("Challenge timed out — opponent did not accept.");
+          setStatus("error");
         } else if (event.type === "done") {
           setCurrentMove(null);
           setAiThinking(false);
-          addLog(`Game over (${event.status}). Paste the URL into the decoder to reveal the message.`);
+          addLog(`✓ Message fully encoded. Game resigned — paste the URL into the decoder.`);
           addLog(`Game URL: ${event.url}`);
           setGameUrl(event.url);
           setStatus("done");
@@ -111,6 +121,15 @@ export default function EncoderPanel() {
           disabled={isActive}
           placeholder="Type your secret message…"
         />
+        {message && (
+          <div style={{ fontSize: "0.78rem", color: "#888", marginTop: "4px" }}>
+            {(() => {
+              const bits = 8 + (message.length + 4) * 8;
+              const moves = Math.ceil(bits / 4);
+              return `${message.length} chars → ${bits} bits → ${moves} White moves`;
+            })()}
+          </div>
+        )}
       </div>
 
       <div className="field">
@@ -129,6 +148,9 @@ export default function EncoderPanel() {
         <input
           value={opponent}
           onChange={(e) => setOpponent(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && message.trim() && password.trim() && !isActive) handleEncode();
+          }}
           disabled={isActive}
           placeholder="Lichess username"
         />
@@ -208,10 +230,20 @@ export default function EncoderPanel() {
       </div>
 
       {gameUrl && (
-        <div className="game-link">
+        <div className="game-link" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <a href={gameUrl} target="_blank" rel="noreferrer">
             View on Lichess →
           </a>
+          <button
+            onClick={async () => {
+              await navigator.clipboard.writeText(gameUrl);
+              setCopiedUrl(true);
+              setTimeout(() => setCopiedUrl(false), 1500);
+            }}
+            style={{ padding: "4px 12px", fontSize: "0.85rem" }}
+          >
+            {copiedUrl ? "Copied!" : "Copy URL"}
+          </button>
         </div>
       )}
 

@@ -13,7 +13,10 @@ export default function DecoderPanel() {
   const [decoded, setDecoded] = useState("");
   const [error, setError] = useState("");
   const [fen, setFen] = useState(INITIAL_FEN);
+  const [log, setLog] = useState([]);
+  const [copiedMsg, setCopiedMsg] = useState(false);
   const panelRef = useRef(null);
+  const logRef = useRef(null);
   const [boardWidth, setBoardWidth] = useState(320);
 
   useEffect(() => {
@@ -24,21 +27,47 @@ export default function DecoderPanel() {
     return () => ro.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [log]);
+
+  function addLog(line) {
+    setLog((prev) => [...prev, line]);
+  }
+
   async function handleDecode() {
     if (!gameInput.trim() || !password.trim()) return;
     setStatus("running");
     setDecoded("");
     setError("");
+    setLog([]);
 
     try {
       const gameId = parseGameId(gameInput);
-      const plaintext = await decodeFromGameId(gameId, password);
+      addLog(`Fetching game ${gameId}…`);
+      const plaintext = await decodeFromGameId(gameId, password, ({ moveNum, uci, index, bits }) => {
+        addLog(`Move ${moveNum} (${uci}): index ${index} → ${bits}`);
+      });
       setDecoded(plaintext);
       setStatus("done");
     } catch (err) {
       setError(err.message);
       setStatus("error");
     }
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter" && gameInput.trim() && password.trim() && status !== "running") {
+      handleDecode();
+    }
+  }
+
+  async function copyDecoded() {
+    await navigator.clipboard.writeText(decoded);
+    setCopiedMsg(true);
+    setTimeout(() => setCopiedMsg(false), 1500);
   }
 
   return (
@@ -61,6 +90,7 @@ export default function DecoderPanel() {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={handleKeyDown}
           disabled={status === "running"}
           placeholder="Shared secret key"
         />
@@ -81,12 +111,28 @@ export default function DecoderPanel() {
       {status === "done" && (
         <div className="decoded-message">
           <label>Hidden Message</label>
-          <div className="message-reveal">{decoded}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div className="message-reveal">{decoded}</div>
+            <button
+              onClick={copyDecoded}
+              style={{ padding: "4px 12px", fontSize: "0.85rem", whiteSpace: "nowrap" }}
+            >
+              {copiedMsg ? "Copied!" : "Copy"}
+            </button>
+          </div>
         </div>
       )}
 
       {status === "error" && (
         <div className="error-box">{error}</div>
+      )}
+
+      {log.length > 0 && (
+        <div className="log" ref={logRef}>
+          {log.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </div>
       )}
     </div>
   );
