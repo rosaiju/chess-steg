@@ -111,7 +111,7 @@ class StegSession {
     const nonKingMoves = verboseMoves.filter(
       (m) => m.piece !== "k" || m.flags.includes("k") || m.flags.includes("q")
     );
-    if (nonKingMoves.length >= ENCODING_PATTERNS) verboseMoves = nonKingMoves;
+    if (nonKingMoves.length > 0) verboseMoves = nonKingMoves;
 
     // Variable-capacity encoding: floor(log2(n)) bits, capped at ENCODING_BITS.
     // Encoding always progresses regardless of how many moves are available.

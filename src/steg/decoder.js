@@ -57,7 +57,7 @@ function getSortedVerboseMoves(chess) {
   const nonKingMoves = moves.filter(
     (m) => m.piece !== "k" || m.flags.includes("k") || m.flags.includes("q")
   );
-  if (nonKingMoves.length >= ENCODING_PATTERNS) moves = nonKingMoves;
+  if (nonKingMoves.length > 0) moves = nonKingMoves;
   return moves;
 }
 
