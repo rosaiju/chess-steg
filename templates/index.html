@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chess Steganography</title>
+
+  <!-- chessboard.js -->
+  <link rel="stylesheet"
+    href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
+  <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      text-align: center;
+      padding: 32px 16px 16px;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    header h1 { font-size: 2rem; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
+    .subtitle { margin-top: 6px; color: #888; font-size: 0.95rem; }
+
+    .panels {
+      display: flex;
+      flex: 1;
+    }
+    .panel {
+      flex: 1;
+      padding: 28px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+    }
+    .panel h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #ccc;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .divider { width: 1px; background: #2a2a2a; flex-shrink: 0; }
+
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label {
+      font-size: 0.78rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .field-hint { font-size: 0.78rem; color: #666; margin-top: 2px; }
+
+    input {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: #e8e8e8;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+      width: 100%;
+    }
+    input:focus { border-color: #555; }
+    input:disabled { opacity: 0.5; }
+
+    .btn-primary {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 11px 20px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .progress-bar {
+      height: 4px;
+      background: #222;
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #2563eb;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .board-wrap {
+      display: flex;
+      justify-content: center;
+      margin: 4px 0;
+    }
+    /* Make chessboard.js fill the panel width */
+    #enc-board, #dec-board { width: 100% !important; }
+
+    .move-badge {
+      background: #1a472a;
+      color: #fff;
+      border-radius: 8px;
+      padding: 14px 20px;
+      display: none;
+      align-items: center;
+      gap: 12px;
+    }
+    .move-badge .label { opacity: 0.75; font-size: 0.85rem; }
+    .move-badge .san { font-weight: 700; font-size: 1.5rem; letter-spacing: 0.04em; }
+
+    .waiting-badge {
+      background: #2a2a3a;
+      color: #aaa;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 0.9rem;
+      display: none;
+    }
+
+    .info-box {
+      border-radius: 8px;
+      padding: 14px 20px;
+      font-size: 0.95rem;
+      display: none;
+    }
+    .info-box.green { background: #1a472a; color: #fff; }
+    .info-box.blue  { background: #1a3a5c; color: #fff; }
+
+    .game-link {
+      display: none;
+      align-items: center;
+      gap: 10px;
+    }
+    .game-link a { color: #60a5fa; font-size: 0.9rem; text-decoration: none; }
+    .game-link a:hover { text-decoration: underline; }
+    .game-link button { padding: 4px 12px; font-size: 0.85rem; }
+
+    .log {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: #6b7280;
+      max-height: 140px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .log:empty { display: none; }
+
+    .decoded-message { display: none; flex-direction: column; gap: 8px; }
+    .decoded-message label {
+      font-size: 0.78rem; color: #888;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .message-row { display: flex; align-items: center; gap: 10px; }
+    .message-reveal {
+      background: #0f2010;
+      border: 1px solid #1a4a1a;
+      border-radius: 6px;
+      padding: 16px;
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #4ade80;
+      text-align: center;
+      letter-spacing: 2px;
+      word-break: break-all;
+      flex: 1;
+    }
+
+    .error-box {
+      background: #1a0a0a;
+      border: 1px solid #4a1a1a;
+      border-radius: 6px;
+      padding: 12px;
+      color: #f87171;
+      font-size: 0.85rem;
+      display: none;
+    }
+
+    button.small {
+      background: #222;
+      color: #ccc;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    button.small:hover { background: #2a2a2a; }
+
+    @media (max-width: 768px) {
+      .panels { flex-direction: column; }
+      .divider { width: 100%; height: 1px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Chess Steganography</h1>
+  <p class="subtitle">Hide encrypted messages inside legal chess games</p>
+</header>
+
+<div class="panels">
+
+  <!-- ── ENCODER ── -->
+  <div class="panel" id="enc-panel">
+    <h2>Encoder</h2>
+
+    <div class="field">
+      <label>Secret Message</label>
+      <input id="enc-msg" value="HELLO DR WANG" placeholder="Type your secret message…" />
+      <div class="field-hint" id="enc-hint"></div>
+    </div>
+
+    <div class="field">
+      <label>Encryption Key</label>
+      <input id="enc-pwd" type="password" placeholder="Shared secret key" />
+    </div>
+
+    <div class="field">
+      <label>Opponent Username <span style="opacity:.55;font-weight:400">(optional — blank = AI)</span></label>
+      <input id="enc-opp" placeholder="Lichess username" />
+    </div>
+
+    <button class="btn-primary" id="enc-btn" onclick="startEncoding()">Encode &amp; Play</button>
+
+    <div class="progress-bar" id="enc-progress">
+      <div class="progress-fill" id="enc-fill"></div>
+    </div>
+
+    <div class="info-box green" id="enc-encoded-box"></div>
+    <div class="info-box blue"  id="enc-done-box"></div>
+
+    <div class="move-badge" id="enc-move-badge">
+      <span class="label" id="enc-move-label"></span>
+      <span class="san"   id="enc-move-san"></span>
+    </div>
+    <div class="waiting-badge" id="enc-waiting">Waiting for opponent…</div>
+
+    <div class="board-wrap">
+      <div id="enc-board"></div>
+    </div>
+
+    <div class="game-link" id="enc-link">
+      <a id="enc-link-a" href="#" target="_blank" rel="noreferrer">View on Lichess →</a>
+      <button class="small" id="enc-copy-btn" onclick="copyEncUrl()">Copy URL</button>
+    </div>
+
+    <div class="log" id="enc-log"></div>
+    <div class="error-box" id="enc-error"></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ── DECODER ── -->
+  <div class="panel" id="dec-panel">
+    <h2>Decoder</h2>
+
+    <div class="field">
+      <label>Lichess Game URL or ID</label>
+      <input id="dec-url" placeholder="https://lichess.org/xxxxxxxx" />
+    </div>
+
+    <div class="field">
+      <label>Encryption Key</label>
+      <input id="dec-pwd" type="password" placeholder="Shared secret key"
+             onkeydown="if(event.key==='Enter') startDecoding()" />
+    </div>
+
+    <button class="btn-primary" id="dec-btn" onclick="startDecoding()">Decode</button>
+
+    <div class="board-wrap">
+      <div id="dec-board"></div>
+    </div>
+
+    <div class="decoded-message" id="dec-result">
+      <label>Hidden Message</label>
+      <div class="message-row">
+        <div class="message-reveal" id="dec-plaintext"></div>
+        <button class="small" onclick="copyDecoded()">Copy</button>
+      </div>
+    </div>
+
+    <div class="error-box" id="dec-error"></div>
+    <div class="log" id="dec-log"></div>
+  </div>
+
+</div>
+
+<script>
+  const PIECE_THEME =
+    'https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/img/chesspieces/wikipedia/{piece}.png';
+
+  // ── Boards ──────────────────────────────────────────────────────────────────
+  const encBoard = Chessboard('enc-board', {
+    position: 'start', draggable: false, pieceTheme: PIECE_THEME,
+  });
+  const decBoard = Chessboard('dec-board', {
+    position: 'start', draggable: false, pieceTheme: PIECE_THEME,
+  });
+
+  // Resize boards to fill panel width on load and resize
+  function resizeBoards() {
+    const w = document.getElementById('enc-panel').clientWidth - 48;
+    $('#enc-board').css('width', w + 'px');
+    $('#dec-board').css('width', w + 'px');
+    encBoard.resize(); decBoard.resize();
+  }
+  window.addEventListener('resize', resizeBoards);
+  setTimeout(resizeBoards, 0);
+
+  // ── Encoding hint ────────────────────────────────────────────────────────────
+  document.getElementById('enc-msg').addEventListener('input', updateHint);
+  function updateHint() {
+    const msg = document.getElementById('enc-msg').value;
+    if (!msg) { document.getElementById('enc-hint').textContent = ''; return; }
+    const bits = 8 + (msg.length + 4) * 8;
+    const moves = Math.ceil(bits / 4);
+    document.getElementById('enc-hint').textContent =
+      `${msg.length} chars → ${bits} bits → ~${moves} White moves`;
+  }
+  updateHint();
+
+  // ── Encoder helpers ──────────────────────────────────────────────────────────
+  let encRunning = false;
+  let encGameUrl = '';
+
+  function encLog(line) {
+    const el = document.getElementById('enc-log');
+    const div = document.createElement('div');
+    div.textContent = line;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function setEncActive(active) {
+    encRunning = active;
+    const inputs = ['enc-msg','enc-pwd','enc-opp'].map(id => document.getElementById(id));
+    inputs.forEach(i => i.disabled = active);
+    document.getElementById('enc-btn').disabled = active;
+  }
+
+  function showEncMove(san, num) {
+    const badge = document.getElementById('enc-move-badge');
+    badge.style.display = 'flex';
+    document.getElementById('enc-move-label').textContent = `Move ${num} — White played:`;
+    document.getElementById('enc-move-san').textContent = san;
+  }
+
+  function hideEncMove() {
+    document.getElementById('enc-move-badge').style.display = 'none';
+  }
+
+  function setEncUrl(url) {
+    encGameUrl = url;
+    document.getElementById('enc-link').style.display = 'flex';
+    document.getElementById('enc-link-a').href = url;
+    document.getElementById('enc-link-a').textContent = 'View on Lichess →';
+  }
+
+  async function copyEncUrl() {
+    await navigator.clipboard.writeText(encGameUrl);
+    const btn = document.getElementById('enc-copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy URL', 1500);
+  }
+
+  async function startEncoding() {
+    const message  = document.getElementById('enc-msg').value.trim();
+    const password = document.getElementById('enc-pwd').value.trim();
+    const opponent = document.getElementById('enc-opp').value.trim();
+    if (!message || !password) return;
+
+    setEncActive(true);
+    document.getElementById('enc-log').innerHTML = '';
+    document.getElementById('enc-error').style.display = 'none';
+    document.getElementById('enc-encoded-box').style.display = 'none';
+    document.getElementById('enc-done-box').style.display = 'none';
+    document.getElementById('enc-link').style.display = 'none';
+    document.getElementById('enc-waiting').style.display = 'none';
+    document.getElementById('enc-progress').style.display = 'none';
+    document.getElementById('enc-fill').style.width = '0%';
+    hideEncMove();
+    encBoard.start();
+
+    document.getElementById('enc-btn').textContent = 'Encoding… 0%';
+
+    try {
+      const res = await fetch('/encode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, password, opponent }),
+      });
+
+      if (!res.ok) { throw new Error(`Server error ${res.status}`); }
+
+      const reader = res.body.getReader();
+      const textDec = new TextDecoder();
+      let buf = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += textDec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try { handleEncEvent(JSON.parse(line.slice(6))); } catch {}
+        }
+      }
+    } catch (err) {
+      document.getElementById('enc-error').textContent = `Error: ${err.message}`;
+      document.getElementById('enc-error').style.display = 'block';
+    } finally {
+      setEncActive(false);
+      document.getElementById('enc-btn').textContent = 'Encode & Play';
+      hideEncMove();
+      document.getElementById('enc-waiting').style.display = 'none';
+    }
+  }
+
+  function handleEncEvent(e) {
+    switch (e.type) {
+      case 'challenging':
+        encLog(`Challenging ${e.opponent}…`); break;
+      case 'waiting':
+        encLog(`Waiting for ${e.opponent} to accept…`);
+        setEncUrl(e.url); break;
+      case 'started':
+        encLog(`${e.opponent} accepted! Encoding message…`); break;
+      case 'declined':
+        encLog(`Challenge declined by ${e.opponent}.`); break;
+      case 'timeout':
+        encLog('Challenge timed out.'); break;
+      case 'creating':
+        encLog('Creating game vs Lichess AI…'); break;
+      case 'created':
+        encLog(`Game created!`);
+        document.getElementById('enc-progress').style.display = 'block';
+        setEncUrl(e.url); break;
+      case 'fen':
+        encBoard.position(e.fen); break;
+      case 'ai_thinking':
+        hideEncMove();
+        document.getElementById('enc-waiting').style.display = 'block'; break;
+      case 'move':
+        document.getElementById('enc-waiting').style.display = 'none';
+        encBoard.position(e.fen);
+        showEncMove(e.move, e.moveNum);
+        const pct = Math.round(e.progress * 100);
+        document.getElementById('enc-fill').style.width = pct + '%';
+        document.getElementById('enc-btn').textContent = `Encoding… ${pct}%`;
+        encLog(`Move ${e.moveNum}: ${e.move} (${pct}%)`); break;
+      case 'encoded': {
+        hideEncMove();
+        const box = document.getElementById('enc-encoded-box');
+        box.textContent = `✓ Message encoded in ${e.whiteMoves.length} moves. Waiting for game to end…`;
+        box.style.display = 'block';
+        setEncUrl(e.url); break;
+      }
+      case 'incomplete':
+        encLog('Game ended before encoding was complete.'); break;
+      case 'done': {
+        const box = document.getElementById('enc-done-box');
+        box.textContent = 'Game over — paste the URL into the decoder to reveal the message.';
+        box.style.display = 'block';
+        encLog(`✓ Done. Game URL: ${e.url}`);
+        setEncUrl(e.url); break;
+      }
+    }
+  }
+
+  // ── Decoder helpers ──────────────────────────────────────────────────────────
+  async function startDecoding() {
+    const gameInput = document.getElementById('dec-url').value.trim();
+    const password  = document.getElementById('dec-pwd').value.trim();
+    if (!gameInput || !password) return;
+
+    document.getElementById('dec-btn').disabled = true;
+    document.getElementById('dec-btn').textContent = 'Decoding…';
+    document.getElementById('dec-error').style.display = 'none';
+    document.getElementById('dec-result').style.display = 'none';
+    document.getElementById('dec-log').innerHTML = '';
+    decBoard.start();
+
+    try {
+      const res = await fetch('/decode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game_input: gameInput, password }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.detail || `Server error ${res.status}`);
+      }
+
+      document.getElementById('dec-plaintext').textContent = data.plaintext;
+      document.getElementById('dec-result').style.display = 'flex';
+
+      for (const m of (data.moves || [])) {
+        decLog(`Move ${m.move_num} (${m.uci}): index ${m.index} → ${m.bits}`);
+      }
+    } catch (err) {
+      document.getElementById('dec-error').textContent = err.message;
+      document.getElementById('dec-error').style.display = 'block';
+    } finally {
+      document.getElementById('dec-btn').disabled = false;
+      document.getElementById('dec-btn').textContent = 'Decode';
+    }
+  }
+
+  function decLog(line) {
+    const el = document.getElementById('dec-log');
+    const div = document.createElement('div');
+    div.textContent = line;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function copyDecoded() {
+    const text = document.getElementById('dec-plaintext').textContent;
+    await navigator.clipboard.writeText(text);
+  }
+</script>
+</body>
+</html>
